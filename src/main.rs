@@ -1,3 +1,6 @@
+mod network;
+
 fn main() {
-    println!("Hello, world!");
+    let net = network::Network::from_file("example/ohio.txt");
+    net.simple_print();
 }
