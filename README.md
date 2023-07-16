@@ -12,13 +12,15 @@ Although the term "graph" is used, here it is used to mean directional graphs as
   - [x] Ignore comments
   - [x] Read Nodes
   - [x] Read Edges/Connections
-  - [ ] Read Node Attributes from file
+  - [x] Read Node Attributes from file
   - [ ] Extract node and edges from [DOT language file](https://www.graphviz.org/doc/info/lang.html)
   - [ ] Extract node and edges attributes from [DOT language file](https://www.graphviz.org/doc/info/lang.html)
-- [ ] ASCII Visualization of the graph
-  - [x] Visualization of graph network
+- [ ] Visualization of the graph
+  - [x] ASCII Visualization of graph network
+  - [x] Graphviz Compatible Visualization of graph network
   - [ ] Visualization sorted by attributes (?)
-  - [ ] Attributes Display using a template
+  - [x] Attributes Display using a template
+		TODO: Use a better template system
 - [ ] Data Filling
   - [ ] Forward Fill
   - [ ] Backward Fill
