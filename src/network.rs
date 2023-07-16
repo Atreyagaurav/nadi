@@ -1,3 +1,4 @@
+use anyhow;
 use std::collections::VecDeque;
 use std::fmt;
 use std::fs::File;
@@ -22,7 +23,7 @@ impl fmt::Display for NodeAttr {
             NodeAttr::String(s) => write!(f, "{}", s),
             NodeAttr::Number(n) => write!(f, "{}", n),
             NodeAttr::Vec(v) => write!(f, "{:?}", v),
-            NodeAttr::Value(v) => write!(f, "{}", v),
+            NodeAttr::Value(v) => write!(f, "{:.2}", v),
             NodeAttr::Timeseries(t) => write!(f, "{:?}", t),
         }
     }
@@ -154,6 +155,28 @@ impl Node {
         self.attrs.get(key)
     }
 
+    pub fn load_attrs_from_file(&mut self, filename: PathBuf) -> anyhow::Result<()> {
+        let file = File::open(&filename)?;
+        let reader_lines = BufReader::new(file).lines();
+        for line in reader_lines {
+            let line = line?.trim().to_string();
+            if line.starts_with("#") || line == "" {
+                continue;
+            }
+            if let Some((key, val)) = line.split_once("=") {
+                let val = val.trim();
+                if let Ok(n) = val.parse::<usize>() {
+                    self.set_attr(key.trim(), NodeAttr::number(n));
+                } else if let Ok(n) = val.parse::<f32>() {
+                    self.set_attr(key.trim(), NodeAttr::value(n));
+                } else {
+                    self.set_attr(key.trim(), NodeAttr::string(val.trim()));
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn get_attr_repr(&self, key: &str) -> String {
         self.attrs
             .get(key)
@@ -178,9 +201,9 @@ impl Node {
 }
 
 pub struct Network {
-    indices: HashMap<String, usize>,
-    nodes: Vec<Node>,
-    node_template: Vec<NodeTemplate>,
+    pub indices: HashMap<String, usize>,
+    pub nodes: Vec<Node>,
+    pub node_template: Vec<NodeTemplate>,
 }
 
 impl Network {
@@ -188,8 +211,8 @@ impl Network {
         let mut indices: HashMap<String, usize> = HashMap::new();
         let mut inputs: Vec<Vec<usize>> = Vec::new();
         let mut output_map: HashMap<usize, usize> = HashMap::new();
-
-        let file = File::open(PathBuf::from(filename)).unwrap();
+        let filename = PathBuf::from(filename);
+        let file = File::open(&filename).unwrap();
         let reader = BufReader::new(file);
         for line in reader.lines() {
             let line = line.unwrap().trim().to_string();
@@ -220,20 +243,35 @@ impl Network {
 
         let names: HashMap<usize, String> =
             indices.clone().into_iter().map(|(k, v)| (v, k)).collect();
+        let nodes_attrs_dir = filename
+            .parent()
+            .unwrap_or(&PathBuf::from("."))
+            .join("nodes/");
         let nodes: Vec<Node> = inputs
             .into_iter()
             .enumerate()
-            .map(|(i, input)| Node::new(i, names[&i].clone(), input, output_map.get(&i).copied()))
+            .map(|(i, input)| {
+                let mut n = Node::new(i, names[&i].clone(), input, output_map.get(&i).copied());
+                n.load_attrs_from_file(nodes_attrs_dir.join(format!("{}.txt", n.name)))
+                    .ok();
+                n
+            })
             .collect::<Vec<Node>>();
         let node_template = vec![
-            NodeTemplate::Lit("[".to_string()),
+            // NodeTemplate::Attr("stn".to_string()),
+            // NodeTemplate::Lit("[".to_string()),
             NodeTemplate::Attr("index".to_string()),
             // NodeTemplate::Lit(":".to_string()),
             // NodeTemplate::Attr("order".to_string()),
             // NodeTemplate::Lit(".".to_string()),
             // NodeTemplate::Attr("level".to_string()),
-            NodeTemplate::Lit("] ".to_string()),
-            NodeTemplate::Attr("name".to_string()),
+            // NodeTemplate::Lit("] ".to_string()),
+            // NodeTemplate::Attr("name".to_string()),
+            // NodeTemplate::Lit(" (".to_string()),
+            // NodeTemplate::Attr("obs_7q10".to_string()),
+            // NodeTemplate::Lit(" cfs; ".to_string()),
+            // NodeTemplate::Attr("nat_7q10".to_string()),
+            // NodeTemplate::Lit(" cfs) ".to_string()),
             // NodeTemplate::Attr("inputs".to_string()),
         ];
         let mut net = Self {
@@ -427,7 +465,7 @@ impl Network {
                     graph_cmps.pop();
                     graph_cmps.push('+');
                 }
-                graph_cmps.push_str(if gnd.merge { "--*" } else { " *" });
+                graph_cmps.push_str(if gnd.merge { "-*" } else { " *" });
                 for _ in 0..gnd.post {
                     graph_cmps.push_str(" |");
                 }
@@ -448,5 +486,66 @@ impl Network {
                 }
                 println!("");
             })
+    }
+
+    pub fn graph_print_dot(&self) {
+        if self.nodes.len() == 0 {
+            return;
+        }
+
+        // Node index, x and y
+        let mut graph_nodes: Vec<(usize, usize, usize)> = Vec::new();
+        let mut all_nodes: HashSet<usize> = (1..self.nodes.len()).collect();
+        let mut curr_nodes: Vec<usize> = vec![0];
+        loop {
+            if curr_nodes.len() == 0 {
+                if all_nodes.len() == 0 {
+                    break;
+                } else {
+                    eprint!("Error");
+                    let elem = all_nodes.iter().next().unwrap().clone();
+                    curr_nodes.push(elem);
+                    all_nodes.remove(&elem);
+                }
+            }
+            let n = curr_nodes.pop().unwrap();
+            let node = &self.nodes[n];
+            let level = *node.get_attr("level").unwrap().read_number().unwrap();
+            graph_nodes.push((n, level, graph_nodes.len()));
+
+            for &inp in node.inputs.iter() {
+                if all_nodes.contains(&inp) {
+                    curr_nodes.push(inp);
+                    all_nodes.remove(&inp);
+                }
+            }
+        }
+        let max_x = graph_nodes.iter().map(|(_, x, _)| x).max().unwrap();
+
+        println!("digraph network {{");
+        println!(" overlap=true;");
+        println!(" node [shape=circle,fixedsize=false];");
+
+        for (n, x, y) in &graph_nodes {
+            let node = &self.nodes[*n];
+            let par = node.output.map(|o| self.nodes[o].index);
+            let text = node.format(&self.node_template);
+            println!(
+                "{} [pos=\"{},{}!\", size=30, fixedsize=true]",
+                node.index, x, y
+            );
+            println!(
+                "l{} [shape=plain,pos=\"{},{}!\", label=\"{}\",fontsize=42]",
+                node.index,
+                max_x + 1,
+                y,
+                text
+            );
+            println!("{0} -> l{0} [color=none]", node.index);
+            if let Some(par) = par {
+                println!("{} -> {}", node.index, par);
+            }
+        }
+        println!("}}");
     }
 }
