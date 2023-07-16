@@ -226,15 +226,15 @@ impl Network {
             .map(|(i, input)| Node::new(i, names[&i].clone(), input, output_map.get(&i).copied()))
             .collect::<Vec<Node>>();
         let node_template = vec![
-            NodeTemplate::Lit("Node [".to_string()),
+            NodeTemplate::Lit("[".to_string()),
             NodeTemplate::Attr("index".to_string()),
-            NodeTemplate::Lit(":".to_string()),
-            NodeTemplate::Attr("order".to_string()),
-            NodeTemplate::Lit(".".to_string()),
-            NodeTemplate::Attr("level".to_string()),
+            // NodeTemplate::Lit(":".to_string()),
+            // NodeTemplate::Attr("order".to_string()),
+            // NodeTemplate::Lit(".".to_string()),
+            // NodeTemplate::Attr("level".to_string()),
             NodeTemplate::Lit("] ".to_string()),
             NodeTemplate::Attr("name".to_string()),
-            NodeTemplate::Attr("inputs".to_string()),
+            // NodeTemplate::Attr("inputs".to_string()),
         ];
         let mut net = Self {
             indices,
@@ -415,24 +415,38 @@ impl Network {
                 }
             }
         }
-        let graph_text: Vec<(String, String)> = graph_nodes
-            .into_iter()
+        let graph_text: Vec<String> = graph_nodes
+            .iter()
             .rev()
             .map(|gnd| {
                 let mut graph_cmps = String::new();
                 for _ in 0..gnd.pre {
                     graph_cmps.push_str(" |");
                 }
-                graph_cmps.push_str(if gnd.merge { ".*" } else { " +" });
+                if gnd.merge {
+                    graph_cmps.pop();
+                    graph_cmps.push('+');
+                }
+                graph_cmps.push_str(if gnd.merge { "--*" } else { " *" });
                 for _ in 0..gnd.post {
                     graph_cmps.push_str(" |");
                 }
-                (graph_cmps, gnd.text)
+                graph_cmps
             })
             .collect();
-        let max_width = graph_text.iter().map(|gt| gt.0.len()).max().unwrap_or(10);
-        graph_text.iter().for_each(|(g, t)| {
-            println!("{1:0$}  {2}", max_width, g, t);
-        })
+        let max_width = graph_text.iter().map(|gt| gt.len()).max().unwrap_or(10);
+        graph_text
+            .iter()
+            .zip(graph_nodes.iter().rev())
+            .for_each(|(pre, gnd)| {
+                println!("{1:0$}  {2}", max_width, pre, gnd.text);
+                for _ in 0..(gnd.pre + if gnd.merge { 0 } else { 1 }) {
+                    print!(" |");
+                }
+                for _ in 0..gnd.post {
+                    print!(" |");
+                }
+                println!("");
+            })
     }
 }

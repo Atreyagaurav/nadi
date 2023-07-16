@@ -9,14 +9,14 @@ Although the term "graph" is used, here it is used to mean directional graphs as
 
 # Planned Features
 - [ ] Read graph connection from a file
-  - [ ] Ignore comments
-  - [ ] Read Nodes
-  - [ ] Read Edges/Connections
+  - [x] Ignore comments
+  - [x] Read Nodes
+  - [x] Read Edges/Connections
   - [ ] Read Node Attributes from file
   - [ ] Extract node and edges from [DOT language file](https://www.graphviz.org/doc/info/lang.html)
   - [ ] Extract node and edges attributes from [DOT language file](https://www.graphviz.org/doc/info/lang.html)
 - [ ] ASCII Visualization of the graph
-  - [ ] Visualization of graph network
+  - [x] Visualization of graph network
   - [ ] Visualization sorted by attributes (?)
   - [ ] Attributes Display using a template
 - [ ] Data Filling
