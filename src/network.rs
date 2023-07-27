@@ -271,12 +271,28 @@ impl Network {
     pub fn set_node_template(&mut self, templ: &str) {
         let mut template: Vec<NodeTemplate> = Vec::new();
         for part in templ.split("$") {
-            if part.contains(" ") {
-                let (attr, litr) = part.split_once(" ").unwrap();
-                template.push(NodeTemplate::Attr(attr.to_string()));
-                template.push(NodeTemplate::Lit(format!(" {}", litr)));
+            let mut attr = String::new();
+            let mut litr = String::new();
+            if part.starts_with("{") {
+                let end = part.find('}').expect("Braces should be closed");
+                attr.push_str(&part[1..end]);
+                litr.push_str(&part[(end + 1)..]);
             } else {
-                template.push(NodeTemplate::Attr(part.to_string()));
+                for (i, c) in part.chars().enumerate() {
+                    match c {
+                        'a'..='z' | 'A'..='Z' | '_' => {
+                            attr.push(c);
+                        }
+                        _ => {
+                            litr.push_str(&part[i..]);
+                            break;
+                        }
+                    }
+                }
+            }
+            template.push(NodeTemplate::Attr(attr));
+            if !litr.is_empty() {
+                template.push(NodeTemplate::Lit(litr));
             }
         }
         self.node_template = template;
