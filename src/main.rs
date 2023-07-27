@@ -8,6 +8,10 @@ fn main() {
         eprintln!("Usage: {} connections_file", args[0]);
         exit(1);
     }
-    let net = network::Network::from_file(&args[1]);
-    net.graph_print_dot();
+    let mut net = network::Network::from_file(&args[1]);
+    if args.len() == 3 {
+        net.set_node_template(&args[2]);
+    }
+    net.graph_print();
+    // net.graph_print_dot();
 }

@@ -257,23 +257,7 @@ impl Network {
                 n
             })
             .collect::<Vec<Node>>();
-        let node_template = vec![
-            // NodeTemplate::Attr("stn".to_string()),
-            // NodeTemplate::Lit("[".to_string()),
-            NodeTemplate::Attr("index".to_string()),
-            // NodeTemplate::Lit(":".to_string()),
-            // NodeTemplate::Attr("order".to_string()),
-            // NodeTemplate::Lit(".".to_string()),
-            // NodeTemplate::Attr("level".to_string()),
-            // NodeTemplate::Lit("] ".to_string()),
-            // NodeTemplate::Attr("name".to_string()),
-            // NodeTemplate::Lit(" (".to_string()),
-            // NodeTemplate::Attr("obs_7q10".to_string()),
-            // NodeTemplate::Lit(" cfs; ".to_string()),
-            // NodeTemplate::Attr("nat_7q10".to_string()),
-            // NodeTemplate::Lit(" cfs) ".to_string()),
-            // NodeTemplate::Attr("inputs".to_string()),
-        ];
+        let node_template = vec![NodeTemplate::Attr("index".to_string())];
         let mut net = Self {
             indices,
             nodes,
@@ -282,6 +266,20 @@ impl Network {
         net.order();
         net.reindex();
         net
+    }
+
+    pub fn set_node_template(&mut self, templ: &str) {
+        let mut template: Vec<NodeTemplate> = Vec::new();
+        for part in templ.split("$") {
+            if part.contains(" ") {
+                let (attr, litr) = part.split_once(" ").unwrap();
+                template.push(NodeTemplate::Attr(attr.to_string()));
+                template.push(NodeTemplate::Lit(format!(" {}", litr)));
+            } else {
+                template.push(NodeTemplate::Attr(part.to_string()));
+            }
+        }
+        self.node_template = template;
     }
 
     pub fn order(&mut self) {
