@@ -1,4 +1,5 @@
 use anyhow;
+use clap::Args;
 use std::collections::VecDeque;
 use std::fmt;
 use std::fs::File;
@@ -8,13 +9,42 @@ use std::{
     path::PathBuf,
 };
 
+use crate::cliargs::CliAction;
+
+#[derive(Args)]
+pub struct CliArgs {
+    /// graphviz format
+    #[arg(short, long, action)]
+    graphviz: bool,
+    /// horizontal
+    #[arg(short, long, action, requires = "graphviz")]
+    rotate: bool,
+    /// Template for Node Label
+    #[arg(short, long, default_value = "${index}")]
+    template: String,
+    /// Connection file
+    connection_file: PathBuf,
+}
+
+impl CliAction for CliArgs {
+    fn run(self) -> anyhow::Result<()> {
+        let mut net = Network::from_file(&self.connection_file);
+        net.set_node_template(&self.template);
+        if self.graphviz {
+            net.graph_print_dot(self.rotate);
+        } else {
+            net.graph_print();
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone)]
 pub enum NodeAttr {
     String(String),
     Number(usize),
     Vec(Vec<usize>),
     Value(f32),
-    Timeseries(Vec<f32>),
 }
 
 impl fmt::Display for NodeAttr {
@@ -24,7 +54,6 @@ impl fmt::Display for NodeAttr {
             NodeAttr::Number(n) => write!(f, "{}", n),
             NodeAttr::Vec(v) => write!(f, "{:?}", v),
             NodeAttr::Value(v) => write!(f, "{:.2}", v),
-            NodeAttr::Timeseries(t) => write!(f, "{:?}", t),
         }
     }
 }
@@ -44,10 +73,6 @@ impl NodeAttr {
 
     pub fn value(val: impl Into<f32>) -> Self {
         Self::Value(val.into())
-    }
-
-    pub fn timseries(val: impl Into<Vec<f32>>) -> Self {
-        Self::Timeseries(val.into())
     }
 
     pub fn read_string(&self) -> Option<&str> {
@@ -76,14 +101,6 @@ impl NodeAttr {
 
     pub fn read_value(&self) -> Option<&f32> {
         if let Self::Value(v) = self {
-            Some(v)
-        } else {
-            None
-        }
-    }
-
-    pub fn read_timeseries(&self) -> Option<&Vec<f32>> {
-        if let Self::Timeseries(v) = self {
             Some(v)
         } else {
             None
@@ -206,12 +223,24 @@ pub struct Network {
     pub node_template: Vec<NodeTemplate>,
 }
 
+fn insert_ifnot_node(
+    indices: &mut HashMap<String, usize>,
+    inputs: &mut Vec<Vec<usize>>,
+    inp: &str,
+) {
+    if !indices.contains_key(inp) {
+        indices.insert(inp.to_string(), indices.len());
+        inputs.push(Vec::new());
+    }
+}
+
 impl Network {
-    pub fn from_file(filename: &str) -> Self {
+    pub fn from_file(filename: &PathBuf) -> Self {
+        // first read the file contents and fill the node indices,
+        // inputs and outputs for those nodes.
         let mut indices: HashMap<String, usize> = HashMap::new();
         let mut inputs: Vec<Vec<usize>> = Vec::new();
         let mut output_map: HashMap<usize, usize> = HashMap::new();
-        let filename = PathBuf::from(filename);
         let file = File::open(&filename).unwrap();
         let reader = BufReader::new(file);
         for line in reader.lines() {
@@ -223,21 +252,12 @@ impl Network {
                 let inp = inp.trim();
                 let out = out.trim();
                 // eprintln!("{} {}", inp, out);
-                if !indices.contains_key(inp) {
-                    indices.insert(inp.to_string(), indices.len());
-                    inputs.push(Vec::new());
-                }
-                if !indices.contains_key(out) {
-                    indices.insert(out.to_string(), indices.len());
-                    inputs.push(Vec::new());
-                }
+                insert_ifnot_node(&mut indices, &mut inputs, inp);
+                insert_ifnot_node(&mut indices, &mut inputs, out);
                 output_map.insert(indices[inp], indices[out]);
                 inputs[indices[out]].push(indices[inp])
             } else {
-                if !indices.contains_key(&line) {
-                    indices.insert(line.to_string(), indices.len());
-                    inputs.push(Vec::new());
-                }
+                insert_ifnot_node(&mut indices, &mut inputs, &line);
             }
         }
 
@@ -270,7 +290,9 @@ impl Network {
 
     pub fn set_node_template(&mut self, templ: &str) {
         let mut template: Vec<NodeTemplate> = Vec::new();
-        for part in templ.split("$") {
+        let mut split_str = templ.split("$");
+        template.push(NodeTemplate::Lit(split_str.next().unwrap().to_string()));
+        for part in split_str {
             let mut attr = String::new();
             let mut litr = String::new();
             if part.starts_with("{") {
@@ -502,7 +524,7 @@ impl Network {
             })
     }
 
-    pub fn graph_print_dot(&self) {
+    pub fn graph_print_dot(&self, horizontal: bool) {
         if self.nodes.len() == 0 {
             return;
         }
@@ -535,13 +557,17 @@ impl Network {
             }
         }
         let max_x = graph_nodes.iter().map(|(_, x, _)| x).max().unwrap();
+        let max_y = graph_nodes.iter().map(|(_, _, y)| y).max().unwrap();
 
         println!("digraph network {{");
         println!(" overlap=true;");
         println!(" node [shape=circle,fixedsize=false];");
-
-        for (n, x, y) in &graph_nodes {
+        for (n, mut x, mut y) in &graph_nodes {
+            if horizontal {
+                (x, y) = (max_y - y, x);
+            }
             let node = &self.nodes[*n];
+            // let riv_len = node.get_attr("riv_length").map(|l| ())
             let par = node.output.map(|o| self.nodes[o].index);
             let text = node.format(&self.node_template);
             println!(
@@ -551,8 +577,8 @@ impl Network {
             println!(
                 "l{} [shape=plain,pos=\"{},{}!\", label=\"{}\",fontsize=42]",
                 node.index,
-                max_x + 1,
-                y,
+                if horizontal { x } else { max_x + 1 },
+                if horizontal { max_x + 1 } else { y },
                 text
             );
             println!("{0} -> l{0} [color=none]", node.index);
