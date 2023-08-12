@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 
 mod cliargs;
+mod connection;
 mod network;
 mod usgs;
 
@@ -20,7 +21,10 @@ struct Cli {
 enum Action {
     /// Download data from USGS
     Usgs(usgs::CliArgs),
+    /// Visualize network
     Network(network::CliArgs),
+    /// Connection
+    Connection(connection::CliArgs),
 }
 
 impl CliAction for Action {
@@ -28,6 +32,7 @@ impl CliAction for Action {
         match self {
             Self::Usgs(v) => v.run(),
             Self::Network(v) => v.run(),
+            Self::Connection(v) => v.run(),
         }
     }
 }
