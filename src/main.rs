@@ -39,5 +39,7 @@ impl CliAction for Action {
 
 fn main() {
     let args = Cli::parse();
-    args.action.run().ok();
+    if let Err(e) = args.action.run() {
+        eprintln!("{:?}", e);
+    }
 }
