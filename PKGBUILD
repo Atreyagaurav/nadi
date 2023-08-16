@@ -1,7 +1,7 @@
 # Maintainer: Gaurav Atreya <allmanpride@gmail.com>
 pkgname=nadi
 pkgver=0.1.0
-pkgrel=3
+pkgrel=5
 pkgdesc="Not Available Data Integration"
 arch=('x86_64')
 license=('GPL3')
@@ -16,5 +16,4 @@ package() {
     cd "$srcdir"
     mkdir -p "$pkgdir/usr/bin"
     cp "../target/release/${pkgname}" "$pkgdir/usr/bin/${pkgname}"
-    chmod u+s "$pkgdir/usr/bin/${pkgname}"
 }

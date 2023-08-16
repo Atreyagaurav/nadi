@@ -26,6 +26,9 @@ pub struct CliArgs {
     /// Output file
     #[arg(short, long)]
     output: Option<PathBuf>,
+    /// Nodes file, if provided save the nodes of the graph as points with nodeid
+    #[arg(short, long)]
+    nodes: Option<PathBuf>,
     /// Points file with points of interest
     #[arg(value_parser=parse_layer, value_name="POINTS_FILE[:LAYER]")]
     points: (PathBuf, String),
@@ -96,20 +99,16 @@ impl CliArgs {
         }
         let mut points_closest: HashMap<&str, (Point2D, f64)> = points
             .iter()
-            .map(|(k, p)| {
-                let dist = distance(p, &streams[0].1);
-                let end = Point2D::new(
-                    streams[0]
-                        .1
-                        .get_point((streams[0].1.point_count() - 1) as i32),
-                );
-                (k.as_str(), (end, dist))
+            .map(|(k, _)| {
+                let origin = Point2D::new((0.0, 0.0, 0.0));
+                (k.as_str(), (origin, f64::INFINITY))
             })
             .collect();
 
         let mut nodes: HashMap<Point2D, usize> = HashMap::new();
         let mut edges: HashMap<usize, usize> = HashMap::new();
-        for (_name, geom) in &streams[1..] {
+        let mut branches: usize = 0;
+        for (_name, geom) in &streams {
             let start = Point2D::new(geom.get_point(0));
             let end = Point2D::new(geom.get_point((geom.point_count() - 1) as i32));
             if !nodes.contains_key(&start) {
@@ -118,7 +117,16 @@ impl CliArgs {
             if !nodes.contains_key(&end) {
                 nodes.insert(end.clone(), nodes.len());
             }
-            edges.insert(nodes[&start], nodes[&end]);
+            if edges.contains_key(&nodes[&start]) {
+                if branches == 0 {
+                    eprintln!("[WARN] River branching: ");
+                } else {
+                    eprint!("  node {}: {} \r", nodes[&start], &start);
+                }
+                branches += 1;
+            } else {
+                edges.insert(nodes[&start], nodes[&end]);
+            }
 
             points.iter().for_each(|(k, p)| {
                 let dist = distance(p, &geom);
@@ -126,6 +134,35 @@ impl CliArgs {
                     points_closest.insert(k.as_str(), (end.clone(), dist));
                 }
             });
+        }
+        if branches > 0 {
+            eprintln!("{} branches out of {} edges. ", branches, edges.len());
+        }
+
+        if let Some(filename) = &self.nodes {
+            let driver = DriverManager::get_driver_by_name(driver)?;
+            let mut out_data = driver.create_vector_only(filename)?;
+
+            let mut txn = out_data.start_transaction()?;
+            let mut layer = txn.create_layer(LayerOptions {
+                name: "nodes",
+                srs: streams_lyr.spatial_ref().as_ref(),
+                ty: gdal_sys::OGRwkbGeometryType::wkbPoint,
+                ..Default::default()
+            })?;
+            layer.create_defn_fields(&[("id", OGRFieldType::OFTInteger)])?;
+            let fields = ["id"];
+
+            for (pt, id) in &nodes {
+                let mut edge_geometry = Geometry::empty(gdal_sys::OGRwkbGeometryType::wkbPoint)?;
+                edge_geometry.add_point(pt.coord());
+                layer.create_feature_fields(
+                    edge_geometry,
+                    &fields,
+                    &[FieldValue::IntegerValue(*id as i32)],
+                )?;
+            }
+            txn.commit()?;
         }
 
         let points_nodes: HashMap<usize, &str> = points_closest
@@ -137,9 +174,11 @@ impl CliArgs {
 
         for pt in points_nodes.keys() {
             let mut outlet = *pt;
+            // eprint!("{}", pt);
             loop {
                 if let Some(&o) = edges.get(&outlet) {
                     outlet = o;
+                    // eprint!(" -> {}", outlet);
                     if points_nodes.contains_key(&o) {
                         println!("{} -> {}", points_nodes[pt], points_nodes[&outlet]);
                         points_edges.insert(*pt, outlet);
@@ -240,7 +279,17 @@ fn get_geometries(
         .features()
         .enumerate()
         .map(|(i, f)| {
-            let geom = f.geometry().unwrap();
+            let geom = match f.geometry() {
+                Some(g) => g.clone(),
+                None => {
+                    // TODO take X,Y possible names as Vec<String>
+                    let x = f.field_as_double_by_name("lon")?.unwrap();
+                    let y = f.field_as_double_by_name("lat")?.unwrap();
+                    let mut pt = Geometry::empty(gdal_sys::OGRwkbGeometryType::wkbPoint)?;
+                    pt.add_point((x, y, 0.0));
+                    pt
+                }
+            };
             let name = if let Some(name) = field {
                 f.field_as_string_by_name(&name)?.unwrap()
             } else {
