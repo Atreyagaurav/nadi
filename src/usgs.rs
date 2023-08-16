@@ -14,7 +14,7 @@ pub struct CliArgs {
     site_no: Vec<String>,
     /// Type of data (u/d/t/b)
     ///
-    /// [upstream-main (u), downstream-main (d), upstreamf-tributories (t), basin (b)]
+    /// [upstream (u), downstream (d), tributories (t), basin (b)]
     #[arg(
         short,
         long,
@@ -32,7 +32,7 @@ impl CliAction for CliArgs {
     fn run(self) -> anyhow::Result<()> {
         for site in self.site_no {
             for data in &self.data {
-                download_usgs(&site, &data, &self.output_dir);
+                data.download(&site, &self.output_dir);
             }
         }
         Ok(())
@@ -42,11 +42,11 @@ impl CliAction for CliArgs {
 #[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
 pub enum GeoInfo {
     #[value(alias = "u")]
-    UpstreamMain,
+    Upstream,
     #[value(alias = "d")]
-    DownstreamMain,
+    Downstream,
     #[value(alias = "t")]
-    UpstreamTributories,
+    Tributories,
     #[value(alias = "b")]
     Basin,
 }
@@ -54,23 +54,27 @@ pub enum GeoInfo {
 impl GeoInfo {
     pub fn usgs_abbr(&self) -> &str {
         match self {
-            Self::UpstreamMain => "UM",
-            Self::DownstreamMain => "DM",
-            Self::UpstreamTributories => "UT",
-            Self::Basin => "BM",
+            Self::Upstream => "navigate/UM",
+            Self::Downstream => "navigate/DM",
+            Self::Tributories => "navigate/UT",
+            Self::Basin => "basin",
         }
     }
 
     pub fn usgs_url(&self, site_no: &str) -> String {
         let dt = self.usgs_abbr();
-        format!("https://labs.waterdata.usgs.gov/api/nldi/linked-data/nwissite/USGS-{site_no}/navigate/{dt}?f=json")
+        format!("https://labs.waterdata.usgs.gov/api/nldi/linked-data/nwissite/USGS-{site_no}/{dt}?f=json")
     }
-}
 
-pub fn download_usgs(site_no: &str, info: &GeoInfo, dir: &PathBuf) {
-    let url = info.usgs_url(site_no);
-    let bytes = reqwest::blocking::get(url).unwrap().bytes().unwrap();
-    let filepath = dir.join(format!("{}_{}.json", site_no, info.usgs_abbr()));
-    let mut file = File::create(filepath).unwrap();
-    file.write_all(&bytes).unwrap();
+    pub fn download(&self, site_no: &str, dir: &PathBuf) {
+        let url = self.usgs_url(site_no);
+        let bytes = reqwest::blocking::get(url).unwrap().bytes().unwrap();
+        let filepath = dir.join(format!(
+            "{}_{}.json",
+            site_no,
+            self.usgs_abbr().split("/").last().unwrap()
+        ));
+        let mut file = File::create(filepath).unwrap();
+        file.write_all(&bytes).unwrap();
+    }
 }
