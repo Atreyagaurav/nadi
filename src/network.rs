@@ -19,9 +19,15 @@ pub struct CliArgs {
     /// horizontal
     #[arg(short, long, action, requires = "graphviz")]
     rotate: bool,
+    /// No node index in circles (for graphviz)
+    #[arg(short, long, action, requires = "graphviz")]
+    no_index: bool,
     /// Template for Node Label
     #[arg(short, long, default_value = "${index}")]
     template: String,
+    /// Sort by this attribute
+    #[arg(short, long)]
+    sort_by: Option<String>,
     /// Connection file
     connection_file: PathBuf,
 }
@@ -31,7 +37,7 @@ impl CliAction for CliArgs {
         let mut net = Network::from_file(&self.connection_file);
         net.set_node_template(&self.template);
         if self.graphviz {
-            net.graph_print_dot(self.rotate);
+            net.graph_print_dot(self.rotate, self.sort_by, self.no_index);
         } else {
             net.graph_print();
         }
@@ -99,11 +105,11 @@ impl NodeAttr {
         }
     }
 
-    pub fn read_value(&self) -> Option<&f32> {
-        if let Self::Value(v) = self {
-            Some(v)
-        } else {
-            None
+    pub fn read_value(&self) -> Option<f32> {
+        match self {
+            Self::Value(v) => Some(*v),
+            Self::Number(i) => Some(*i as f32),
+            _ => None,
         }
     }
 }
@@ -407,9 +413,9 @@ impl Network {
                 self.nodes[n]
                     .inputs
                     .sort_by(|n1, n2| orders[*n1].cmp(&orders[*n2]));
-                self.nodes[n].inputs.reverse();
+                // self.nodes[n].inputs.reverse();
                 for &inp in self.nodes[n].inputs.iter() {
-                    let level = if inp == self.nodes[n].inputs[0] {
+                    let level = if inp == self.nodes[n].inputs[self.nodes[n].inputs.len() - 1] {
                         level
                     } else {
                         level + 1
@@ -524,7 +530,7 @@ impl Network {
             })
     }
 
-    pub fn graph_print_dot(&self, horizontal: bool) {
+    pub fn graph_print_dot(&self, horizontal: bool, sort_by: Option<String>, no_nodes: bool) {
         if self.nodes.len() == 0 {
             return;
         }
@@ -549,12 +555,32 @@ impl Network {
             let level = *node.get_attr("level").unwrap().read_number().unwrap();
             graph_nodes.push((n, level, graph_nodes.len()));
 
-            for &inp in node.inputs.iter() {
+            for &inp in node.inputs.iter().rev() {
                 if all_nodes.contains(&inp) {
                     curr_nodes.push(inp);
                     all_nodes.remove(&inp);
                 }
             }
+        }
+        if let Some(sb) = sort_by {
+            let mut ind: Vec<usize> = (0..graph_nodes.len()).collect();
+            let attrs: Vec<f32> = ind
+                .iter()
+                .map(|n| {
+                    self.nodes[*n]
+                        .get_attr(&sb)
+                        .expect("Attribute should be present")
+                        .read_value()
+                        .expect("Attribute should have float value")
+                })
+                .collect();
+            ind.sort_by(|n1, n2| attrs[*n1].partial_cmp(&attrs[*n2]).unwrap());
+            let y_map: HashMap<usize, usize> =
+                ind.into_iter().enumerate().map(|(k, v)| (v, k)).collect();
+            graph_nodes = graph_nodes
+                .into_iter()
+                .map(|(n, x, _)| (n, x, y_map[&n]))
+                .collect();
         }
         let max_x = graph_nodes.iter().map(|(_, x, _)| x).max().unwrap();
         let max_y = graph_nodes.iter().map(|(_, _, y)| y).max().unwrap();
@@ -571,8 +597,15 @@ impl Network {
             let par = node.output.map(|o| self.nodes[o].index);
             let text = node.format(&self.node_template);
             println!(
-                "{} [pos=\"{},{}!\", size=30, fixedsize=true]",
-                node.index, x, y
+                "{} [pos=\"{},{}!\", size=30, fixedsize=true, label=\"{}\"]",
+                node.index,
+                x,
+                y,
+                if no_nodes {
+                    "".to_string()
+                } else {
+                    node.index.to_string()
+                }
             );
             println!(
                 "l{} [shape=plain,pos=\"{},{}!\", label=\"{}\",fontsize=42]",
