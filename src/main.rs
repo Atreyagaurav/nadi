@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 mod cliargs;
 mod connection;
 mod network;
+mod timeseries;
 mod usgs;
 
 use crate::cliargs::CliAction;
@@ -25,6 +26,8 @@ enum Action {
     Network(network::CliArgs),
     /// Connection
     Connection(connection::CliArgs),
+    /// Timeseries
+    Timeseries(timeseries::CliArgs),
 }
 
 impl CliAction for Action {
@@ -33,6 +36,7 @@ impl CliAction for Action {
             Self::Usgs(v) => v.run(),
             Self::Network(v) => v.run(),
             Self::Connection(v) => v.run(),
+            Self::Timeseries(v) => v.run(),
         }
     }
 }
