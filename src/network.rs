@@ -1,5 +1,5 @@
 use anyhow;
-use clap::Args;
+use clap::{Args, ValueEnum};
 use std::collections::VecDeque;
 use std::fmt;
 use std::fs::File;
@@ -16,15 +16,25 @@ pub struct CliArgs {
     /// graphviz format
     #[arg(short, long, action)]
     graphviz: bool,
-    /// horizontal
-    #[arg(short, long, action, requires = "graphviz")]
-    rotate: bool,
-    /// No node index in circles (for graphviz)
-    #[arg(short, long, action, requires = "graphviz")]
-    no_index: bool,
+    /// Direction to move while making the graph
+    #[arg(
+        short,
+        long,
+        rename_all = "lower",
+        default_value = "b",
+        value_enum,
+        requires = "graphviz"
+    )]
+    direction: GraphVizDirection,
+    /// Template for the text inside the circle of nodes
+    #[arg(short, long, action, requires = "graphviz", default_value = "${index}")]
+    node_template: String,
+    /// URL Template for Node URL
+    #[arg(short, long, requires = "graphviz", default_value = "")]
+    url_template: String,
     /// Template for Node Label
     #[arg(short, long, default_value = "${index}")]
-    template: String,
+    label_template: String,
     /// Sort by this attribute
     #[arg(short, long)]
     sort_by: Option<String>,
@@ -32,14 +42,46 @@ pub struct CliArgs {
     connection_file: PathBuf,
 }
 
+struct GraphVizSettings {
+    direction: GraphVizDirection,
+    sort_by: Option<String>,
+    node_template: Vec<NodeTemplate>,
+    label_template: Vec<NodeTemplate>,
+    url_template: Vec<NodeTemplate>,
+}
+
+impl GraphVizSettings {
+    fn new(args: &CliArgs) -> Self {
+        Self {
+            direction: args.direction,
+            sort_by: args.sort_by.clone(),
+            node_template: parse_template_str(&args.node_template),
+            label_template: parse_template_str(&args.label_template),
+            url_template: parse_template_str(&args.url_template),
+        }
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
+pub enum GraphVizDirection {
+    #[value(alias = "tb", alias = "b")]
+    TopToBottom,
+    #[value(alias = "bt", alias = "t")]
+    BottomToTop,
+    #[value(alias = "rl", alias = "l")]
+    RightToLeft,
+    #[value(alias = "rl", alias = "r")]
+    LeftToRight,
+}
+
 impl CliAction for CliArgs {
     fn run(self) -> anyhow::Result<()> {
-        let mut net = Network::from_file(&self.connection_file);
-        net.set_node_template(&self.template);
+        let net = Network::from_file(&self.connection_file);
         if self.graphviz {
-            net.graph_print_dot(self.rotate, self.sort_by, self.no_index);
+            let settings = GraphVizSettings::new(&self);
+            net.graph_print_dot(&settings);
         } else {
-            net.graph_print();
+            net.graph_print(&parse_template_str(&self.label_template));
         }
         Ok(())
     }
@@ -226,7 +268,6 @@ impl Node {
 pub struct Network {
     pub indices: HashMap<String, usize>,
     pub nodes: Vec<Node>,
-    pub node_template: Vec<NodeTemplate>,
 }
 
 fn insert_ifnot_node(
@@ -283,47 +324,10 @@ impl Network {
                 n
             })
             .collect::<Vec<Node>>();
-        let node_template = vec![NodeTemplate::Attr("index".to_string())];
-        let mut net = Self {
-            indices,
-            nodes,
-            node_template,
-        };
+        let mut net = Self { indices, nodes };
         net.order();
         net.reindex();
         net
-    }
-
-    pub fn set_node_template(&mut self, templ: &str) {
-        let mut template: Vec<NodeTemplate> = Vec::new();
-        let mut split_str = templ.split("$");
-        template.push(NodeTemplate::Lit(split_str.next().unwrap().to_string()));
-        for part in split_str {
-            let mut attr = String::new();
-            let mut litr = String::new();
-            if part.starts_with("{") {
-                let end = part.find('}').expect("Braces should be closed");
-                attr.push_str(&part[1..end]);
-                litr.push_str(&part[(end + 1)..]);
-            } else {
-                for (i, c) in part.chars().enumerate() {
-                    match c {
-                        'a'..='z' | 'A'..='Z' | '_' => {
-                            attr.push(c);
-                        }
-                        _ => {
-                            litr.push_str(&part[i..]);
-                            break;
-                        }
-                    }
-                }
-            }
-            template.push(NodeTemplate::Attr(attr));
-            if !litr.is_empty() {
-                template.push(NodeTemplate::Lit(litr));
-            }
-        }
-        self.node_template = template;
     }
 
     pub fn order(&mut self) {
@@ -445,13 +449,13 @@ impl Network {
         self.nodes = new_nodes;
     }
 
-    pub fn simple_print(&self) {
+    pub fn simple_print(&self, template: &Vec<NodeTemplate>) {
         for node in &self.nodes {
-            println!("{}", node.format(&self.node_template));
+            println!("{}", node.format(&template));
         }
     }
 
-    pub fn graph_print(&self) {
+    pub fn graph_print(&self, template: &Vec<NodeTemplate>) {
         if self.nodes.len() == 0 {
             return;
         }
@@ -473,7 +477,7 @@ impl Network {
             let mut gnd = GraphNode::default();
             let n = curr_nodes.pop().unwrap();
             let node = &self.nodes[n];
-            gnd.text = node.format(&self.node_template);
+            gnd.text = node.format(&template);
 
             let level = *node.get_attr("level").unwrap().read_number().unwrap();
             let par_level = *self.nodes[node.output.unwrap_or(node.index)]
@@ -530,7 +534,7 @@ impl Network {
             })
     }
 
-    pub fn graph_print_dot(&self, horizontal: bool, sort_by: Option<String>, no_nodes: bool) {
+    pub fn graph_print_dot(&self, settings: &GraphVizSettings) {
         if self.nodes.len() == 0 {
             return;
         }
@@ -562,7 +566,7 @@ impl Network {
                 }
             }
         }
-        if let Some(sb) = sort_by {
+        if let Some(sb) = &settings.sort_by {
             let mut ind: Vec<usize> = (0..graph_nodes.len()).collect();
             let attrs: Vec<f32> = ind
                 .iter()
@@ -588,6 +592,8 @@ impl Network {
         println!("digraph network {{");
         println!(" overlap=true;");
         println!(" node [shape=circle,fixedsize=false];");
+
+        let horizontal = settings.direction == GraphVizDirection::LeftToRight;
         for (n, mut x, mut y) in &graph_nodes {
             if horizontal {
                 (x, y) = (max_y - y, x);
@@ -595,18 +601,16 @@ impl Network {
             let node = &self.nodes[*n];
             // let riv_len = node.get_attr("riv_length").map(|l| ())
             let par = node.output.map(|o| self.nodes[o].index);
-            let text = node.format(&self.node_template);
-            println!(
-                "{} [pos=\"{},{}!\", size=30, fixedsize=true, label=\"{}\"]",
-                node.index,
-                x,
-                y,
-                if no_nodes {
-                    "".to_string()
-                } else {
-                    node.index.to_string()
-                }
+            let text = node.format(&settings.node_template);
+            print!(
+                "{} [pos=\"{},{}!\", size=30, fixedsize=true",
+                node.index, x, y
             );
+
+            if settings.node_template.is_empty() {
+                print!(",label=\"\"");
+            }
+            println!("]");
             println!(
                 "l{} [shape=plain,pos=\"{},{}!\", label=\"{}\",fontsize=42]",
                 node.index,
@@ -621,4 +625,39 @@ impl Network {
         }
         println!("}}");
     }
+}
+
+fn parse_template_str(templ: &str) -> Vec<NodeTemplate> {
+    let mut template: Vec<NodeTemplate> = Vec::new();
+    if templ.is_empty() {
+        return template;
+    }
+    let mut split_str = templ.split("$");
+    template.push(NodeTemplate::Lit(split_str.next().unwrap().to_string()));
+    for part in split_str {
+        let mut attr = String::new();
+        let mut litr = String::new();
+        if part.starts_with("{") {
+            let end = part.find('}').expect("Braces should be closed");
+            attr.push_str(&part[1..end]);
+            litr.push_str(&part[(end + 1)..]);
+        } else {
+            for (i, c) in part.chars().enumerate() {
+                match c {
+                    'a'..='z' | 'A'..='Z' | '_' => {
+                        attr.push(c);
+                    }
+                    _ => {
+                        litr.push_str(&part[i..]);
+                        break;
+                    }
+                }
+            }
+        }
+        template.push(NodeTemplate::Attr(attr));
+        if !litr.is_empty() {
+            template.push(NodeTemplate::Lit(litr));
+        }
+    }
+    template
 }

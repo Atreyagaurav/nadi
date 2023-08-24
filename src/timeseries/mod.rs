@@ -30,7 +30,7 @@ impl CliAction for CliArgs {
         };
         t1.fill_na();
         println!("{:?}", t1.values);
-        t2.fill_na_from(&t1);
+        t2.cast_na_only_from(&t1);
         println!("{:?}", t2.values);
         Ok(())
     }
