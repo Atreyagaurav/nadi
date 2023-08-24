@@ -26,8 +26,14 @@ pub struct CliArgs {
         requires = "graphviz"
     )]
     direction: GraphVizDirection,
+    /// Shape of the node
+    #[arg(short = 'S', long, requires = "graphviz", default_value = "circle")]
+    node_shape: String,
+    /// size of the node
+    #[arg(short = 'N', long, requires = "graphviz", default_value = "30")]
+    node_size: usize,
     /// Template for the text inside the circle of nodes
-    #[arg(short, long, action, requires = "graphviz", default_value = "${index}")]
+    #[arg(short, long, requires = "graphviz", default_value = "${index}")]
     node_template: String,
     /// URL Template for Node URL
     #[arg(short, long, requires = "graphviz", default_value = "")]
@@ -42,9 +48,21 @@ pub struct CliArgs {
     connection_file: PathBuf,
 }
 
+// TODO make HashMap CLI args with graph attr, node_attr, label_attr,
+// edge_attr etc that can be looped through and then used for the dot
+// generation. It will be more flexible and easier to make than adding
+// each option one by one. (We can also remove the label attr one
+// honestly, remove the label totally.)
+
+// Also make anek link type on emacs, that I can use for other stuff
+// as well. The link type will use the anek template to open the
+// links. I can make it easy to change link template so the same link
+// can work to open multiple files for me.
 struct GraphVizSettings {
     direction: GraphVizDirection,
     sort_by: Option<String>,
+    node_shape: String,
+    node_size: usize,
     node_template: Vec<NodeTemplate>,
     label_template: Vec<NodeTemplate>,
     url_template: Vec<NodeTemplate>,
@@ -55,6 +73,8 @@ impl GraphVizSettings {
         Self {
             direction: args.direction,
             sort_by: args.sort_by.clone(),
+            node_shape: args.node_shape.clone(),
+            node_size: args.node_size,
             node_template: parse_template_str(&args.node_template),
             label_template: parse_template_str(&args.label_template),
             url_template: parse_template_str(&args.url_template),
@@ -591,7 +611,7 @@ impl Network {
 
         println!("digraph network {{");
         println!(" overlap=true;");
-        println!(" node [shape=circle,fixedsize=false];");
+        println!(" node [shape={},fixedsize=false];", settings.node_shape);
 
         let horizontal = settings.direction == GraphVizDirection::LeftToRight;
         for (n, mut x, mut y) in &graph_nodes {
@@ -601,14 +621,17 @@ impl Network {
             let node = &self.nodes[*n];
             // let riv_len = node.get_attr("riv_length").map(|l| ())
             let par = node.output.map(|o| self.nodes[o].index);
-            let text = node.format(&settings.node_template);
+            let node_txt = node.format(&settings.node_template);
+            let label = node.format(&settings.label_template);
+            let url = node.format(&settings.url_template);
             print!(
-                "{} [pos=\"{},{}!\", size=30, fixedsize=true",
-                node.index, x, y
+                "{} [pos=\"{},{}!\", size={}, fixedsize=true",
+                node.index, x, y, settings.node_size
             );
 
-            if settings.node_template.is_empty() {
-                print!(",label=\"\"");
+            print!(",label=\"{}\"", node_txt);
+            if !url.is_empty() {
+                print!(",URL=\"{}\"", url);
             }
             println!("]");
             println!(
@@ -616,7 +639,7 @@ impl Network {
                 node.index,
                 if horizontal { x } else { max_x + 1 },
                 if horizontal { max_x + 1 } else { y },
-                text
+                label
             );
             println!("{0} -> l{0} [color=none]", node.index);
             if let Some(par) = par {
