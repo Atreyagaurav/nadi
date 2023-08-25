@@ -36,7 +36,7 @@ pub struct CliArgs {
     #[arg(short, long, requires = "graphviz", default_value = "${index}")]
     node_template: String,
     /// URL Template for Node URL
-    #[arg(short, long, requires = "graphviz", default_value = "")]
+    #[arg(short, long, default_value = "")]
     url_template: String,
     /// Template for Node Label
     #[arg(short, long, default_value = "${index}")]
@@ -109,7 +109,7 @@ impl CliAction for CliArgs {
             let settings = GraphVizSettings::new(&self);
             net.graph_print_dot(&settings);
         } else if self.latex_table.len() > 0 {
-            net.generate_latex_table(&self.latex_table);
+            net.generate_latex_table(&self.latex_table, &parse_template_str(&self.url_template));
         } else {
             net.graph_print(&parse_template_str(&self.label_template));
         }
@@ -660,7 +660,11 @@ impl Network {
         println!("}}");
     }
 
-    fn generate_latex_table(&self, latex_table: &Vec<(String, Vec<NodeTemplate>)>) {
+    fn generate_latex_table(
+        &self,
+        latex_table: &Vec<(String, Vec<NodeTemplate>)>,
+        url_template: &Vec<NodeTemplate>,
+    ) {
         if self.nodes.len() == 0 {
             return;
         }
@@ -693,19 +697,20 @@ impl Network {
             }
         }
         println!(
-            r"	\documentclass{{standalone}}
+            r"\documentclass{{standalone}}
 
 \usepackage{{array}}
 \usepackage{{booktabs}}
 \usepackage{{multirow}}
 \usepackage{{graphicx}}
+\usepackage[implicit=false]{{hyperref}}
 \usepackage{{tikz}}
 \usetikzlibrary{{tikzmark}}
 \newcommand{{\TikzArrow}}[2]{{%
   \tikz[overlay,remember picture]{{\path[->] (#1) edge (#2);}}}}
 
-\newcommand{{\TikzNode}}[3][0]{{%
-  \tikz[overlay,remember picture]{{ \draw (#1 / 2 +0.5, 0.1) circle [radius=0.14] node (#2){{\tiny #3}};}}}}
+\newcommand{{\TikzNode}}[4][0]{{%
+  \tikz[overlay,remember picture]{{ \draw (#1 / 2 +0.5, 0.1) circle [radius=0.14] node (#2) {{\href{{#4}}{{\tiny #3}}}} ;}}}}
 
 
 \begin{{document}}
@@ -724,10 +729,11 @@ impl Network {
             let node = &self.nodes[*n];
             // let riv_len = node.get_attr("riv_length").map(|l| ())
             let parent = node.output.map(|o| self.nodes[o].index);
-            print!("\\TikzNode[{x}]{{{0}}}{{{0}}}", node.index);
+            let url = node.format(&url_template);
+            print!("\\TikzNode[{x}]{{{0}}}{{{0}}}{{{url}}}", node.index);
             for (_, templ) in latex_table {
                 let templ = node.format(&templ);
-                print!(" & {{{templ}}}");
+                print!(" & {templ}");
             }
             println!(r"\\");
 
