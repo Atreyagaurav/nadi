@@ -1,4 +1,4 @@
-use anyhow;
+use anyhow::{self, Context};
 use clap::{Args, ValueEnum};
 use std::collections::VecDeque;
 use std::fmt;
@@ -41,6 +41,9 @@ pub struct CliArgs {
     /// Template for Node Label
     #[arg(short, long, default_value = "${index}")]
     label_template: String,
+    /// Latex table header and template
+    #[arg(short = 'L', long, conflicts_with = "graphviz", value_parser=parse_latex_table)]
+    latex_table: Vec<(String, Vec<NodeTemplate>)>,
     /// Sort by this attribute
     #[arg(short, long)]
     sort_by: Option<String>,
@@ -48,6 +51,11 @@ pub struct CliArgs {
     connection_file: PathBuf,
 }
 
+fn parse_latex_table(arg: &str) -> Result<(String, Vec<NodeTemplate>), anyhow::Error> {
+    arg.split_once(':')
+        .context("Header should have a template followed")
+        .map(|(head, templ)| (head.to_string(), parse_template_str(&templ)))
+}
 // TODO make HashMap CLI args with graph attr, node_attr, label_attr,
 // edge_attr etc that can be looped through and then used for the dot
 // generation. It will be more flexible and easier to make than adding
@@ -100,6 +108,8 @@ impl CliAction for CliArgs {
         if self.graphviz {
             let settings = GraphVizSettings::new(&self);
             net.graph_print_dot(&settings);
+        } else if self.latex_table.len() > 0 {
+            net.generate_latex_table(&self.latex_table);
         } else {
             net.graph_print(&parse_template_str(&self.label_template));
         }
@@ -176,6 +186,7 @@ impl NodeAttr {
     }
 }
 
+#[derive(Clone)]
 pub enum NodeTemplate {
     Attr(String),
     Lit(String),
@@ -647,6 +658,88 @@ impl Network {
             }
         }
         println!("}}");
+    }
+
+    fn generate_latex_table(&self, latex_table: &Vec<(String, Vec<NodeTemplate>)>) {
+        if self.nodes.len() == 0 {
+            return;
+        }
+
+        // Node index, x and y
+        let mut graph_nodes: Vec<(usize, usize, usize)> = Vec::new();
+        let mut all_nodes: HashSet<usize> = (1..self.nodes.len()).collect();
+        let mut curr_nodes: Vec<usize> = vec![0];
+        loop {
+            if curr_nodes.len() == 0 {
+                if all_nodes.len() == 0 {
+                    break;
+                } else {
+                    eprint!("Error");
+                    let elem = all_nodes.iter().next().unwrap().clone();
+                    curr_nodes.push(elem);
+                    all_nodes.remove(&elem);
+                }
+            }
+            let n = curr_nodes.pop().unwrap();
+            let node = &self.nodes[n];
+            let level = *node.get_attr("level").unwrap().read_number().unwrap();
+            graph_nodes.push((n, level, graph_nodes.len()));
+
+            for &inp in node.inputs.iter().rev() {
+                if all_nodes.contains(&inp) {
+                    curr_nodes.push(inp);
+                    all_nodes.remove(&inp);
+                }
+            }
+        }
+        println!(
+            r"	\documentclass{{standalone}}
+
+\usepackage{{array}}
+\usepackage{{booktabs}}
+\usepackage{{multirow}}
+\usepackage{{graphicx}}
+\usepackage{{tikz}}
+\usetikzlibrary{{tikzmark}}
+\newcommand{{\TikzArrow}}[2]{{%
+  \tikz[overlay,remember picture]{{\path[->] (#1) edge (#2);}}}}
+
+\newcommand{{\TikzNode}}[3][0]{{%
+  \tikz[overlay,remember picture]{{ \draw (#1 / 2 +0.5, 0.1) circle [radius=0.14] node (#2){{\tiny #3}};}}}}
+
+
+\begin{{document}}
+
+  \begin{{tabular}}{{lllll}}
+    \toprule"
+        );
+        print!("Connection");
+        for (head, _) in latex_table {
+            print!(" & {head}");
+        }
+        println!(r"\\");
+        println!(r"\midrule");
+        let mut connections_list: Vec<String> = Vec::new();
+        for (n, x, _) in graph_nodes.iter().rev() {
+            let node = &self.nodes[*n];
+            // let riv_len = node.get_attr("riv_length").map(|l| ())
+            let parent = node.output.map(|o| self.nodes[o].index);
+            print!("\\TikzNode[{x}]{{{0}}}{{{0}}}", node.index);
+            for (_, templ) in latex_table {
+                let templ = node.format(&templ);
+                print!(" & {{{templ}}}");
+            }
+            println!(r"\\");
+
+            if let Some(par) = parent {
+                connections_list.push(format!("\\TikzArrow{{{}}}{{{}}}", node.index, par));
+            }
+        }
+        println!("\\bottomrule\n\\end{{tabular}}");
+        for conn in connections_list {
+            println!("{}", conn);
+        }
+        println!(r"\end{{document}}")
     }
 }
 
