@@ -703,14 +703,12 @@ impl Network {
 \usepackage{{booktabs}}
 \usepackage{{multirow}}
 \usepackage{{graphicx}}
-\usepackage[implicit=false]{{hyperref}}
+\usepackage[hidelinks]{{hyperref}}
 \usepackage{{tikz}}
 \usetikzlibrary{{tikzmark}}
-\newcommand{{\TikzArrow}}[2]{{%
-  \tikz[overlay,remember picture]{{\path[->] (#1) edge (#2);}}}}
 
 \newcommand{{\TikzNode}}[4][0]{{%
-  \tikz[overlay,remember picture]{{ \draw (#1 / 2 +0.5, 0.1) circle [radius=0.14] node (#2) {{\href{{#4}}{{\tiny #3}}}} ;}}}}
+  \tikz[overlay,remember picture]{{\draw (#1 / 2 +0.5, 0.1) circle [radius=0.14] node (#2) {{\href{{#4}}{{\tiny #3}}}};}}}}
 
 
 \begin{{document}}
@@ -738,13 +736,17 @@ impl Network {
             println!(r"\\");
 
             if let Some(par) = parent {
-                connections_list.push(format!("\\TikzArrow{{{}}}{{{}}}", node.index, par));
+                connections_list.push(format!("\\path[->] ({}) edge ({});", node.index, par));
             }
         }
-        println!("\\bottomrule\n\\end{{tabular}}");
+        println!("\\bottomrule");
+        println!("\\end{{tabular}}");
+        // this causes a small extra space on the right side, couldn't fix it
+        println!("\\tikz[overlay,remember picture]{{");
         for conn in connections_list {
             println!("{}", conn);
         }
+        println!("}}");
         println!(r"\end{{document}}")
     }
 }
