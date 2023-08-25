@@ -22,10 +22,12 @@ impl CliAction for CliArgs {
     fn run(self) -> anyhow::Result<()> {
         let mut t1 = Timeseries1 {
             values: vec![1.1, 2.3, f64::NAN],
+            times: TimeseriesTime::None,
             properties: HashMap::new(),
         };
         let mut t2 = Timeseries1 {
             values: vec![1.0, f64::NAN, 3.0],
+            times: TimeseriesTime::None,
             properties: HashMap::new(),
         };
         t1.fill_na();
@@ -38,6 +40,7 @@ impl CliAction for CliArgs {
 
 struct Timeseries1 {
     values: Vec<f64>,
+    times: TimeseriesTime,
     properties: HashMap<String, f64>,
 }
 
@@ -45,15 +48,24 @@ impl Timeseries1 {
     pub fn from_file(ts_file: &PathBuf) -> Self {
         Self {
             values: vec![1.1, 2.3, 3.4],
+            times: TimeseriesTime::None,
             properties: HashMap::new(),
         }
     }
+}
+
+enum TimeseriesTime {
+    None,
+    Regular(usize, usize),
+    Irregular(Vec<usize>),
 }
 
 pub trait Timeseries {
     fn length(&self) -> usize;
     fn get_val(&self, index: usize) -> f64;
     fn set_val(&mut self, index: usize, val: f64);
+    fn set_times(&mut self, time: TimeseriesTime);
+    fn get_time(&self, index: usize) -> Option<usize>;
 }
 
 impl Timeseries for Timeseries1 {
@@ -67,6 +79,24 @@ impl Timeseries for Timeseries1 {
 
     fn set_val(&mut self, index: usize, val: f64) {
         self.values[index] = val;
+    }
+
+    fn get_time(&self, index: usize) -> Option<usize> {
+        match &self.times {
+            TimeseriesTime::None => None,
+            TimeseriesTime::Regular(start, increment) => {
+                if index < self.values.len() {
+                    Some(start + increment * index)
+                } else {
+                    None
+                }
+            }
+            TimeseriesTime::Irregular(times) => times.get(index).copied(),
+        }
+    }
+
+    fn set_times(&mut self, time: TimeseriesTime) {
+        self.times = time;
     }
 }
 
