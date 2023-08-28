@@ -1,5 +1,3 @@
-use anyhow;
-use reqwest;
 use std::io::Write;
 use std::{fs::File, path::PathBuf};
 
@@ -72,7 +70,7 @@ impl GeoInfo {
         let filepath = dir.join(format!(
             "{}_{}.json",
             site_no,
-            self.usgs_abbr().split("/").last().unwrap()
+            self.usgs_abbr().split('/').last().unwrap()
         ));
         let mut file = File::create(filepath).unwrap();
         file.write_all(&bytes).unwrap();

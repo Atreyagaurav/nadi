@@ -1,3 +1,4 @@
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
@@ -38,9 +39,9 @@ pub struct CliArgs {
 }
 
 fn parse_layer(arg: &str) -> Result<(PathBuf, String), anyhow::Error> {
-    if let Some((path, layer)) = arg.split_once(":") {
+    if let Some((path, layer)) = arg.split_once(':') {
         let data = Dataset::open(path)?;
-        if data.layer_by_name(&layer).is_err() {
+        if data.layer_by_name(layer).is_err() {
             Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 format!("Layer name {layer} doesn't exist in the file {path}"),
@@ -50,7 +51,7 @@ fn parse_layer(arg: &str) -> Result<(PathBuf, String), anyhow::Error> {
             Ok((PathBuf::from(path), layer.to_string()))
         }
     } else {
-        let data = Dataset::open(&arg)?;
+        let data = Dataset::open(arg)?;
         if data.layer_count() == 1 {
             let layer = data.layer(0)?;
             Ok((PathBuf::from(&arg), layer.name()))
@@ -117,19 +118,19 @@ impl CliArgs {
             if !nodes.contains_key(&end) {
                 nodes.insert(end.clone(), nodes.len());
             }
-            if edges.contains_key(&nodes[&start]) {
+            if let Entry::Vacant(e) = edges.entry(nodes[&start]) {
+                e.insert(nodes[&end]);
+            } else {
                 if branches == 0 {
                     eprintln!("[WARN] River branching: ");
                 } else {
                     eprint!("  node {}: {} \r", nodes[&start], &start);
                 }
                 branches += 1;
-            } else {
-                edges.insert(nodes[&start], nodes[&end]);
             }
 
             points.iter().for_each(|(k, p)| {
-                let dist = distance(p, &geom);
+                let dist = distance(p, geom);
                 if dist < points_closest[k.as_str()].1 {
                     points_closest.insert(k.as_str(), (end.clone(), dist));
                 }
@@ -187,7 +188,7 @@ impl CliArgs {
                 } else {
                     eprintln!(
                         "{} {} -> None {}",
-                        points_nodes[pt], nodes_rev[&pt], nodes_rev[&outlet]
+                        points_nodes[pt], nodes_rev[pt], nodes_rev[&outlet]
                     );
                     break;
                 }
@@ -291,7 +292,7 @@ fn get_geometries(
                 }
             };
             let name = if let Some(name) = field {
-                f.field_as_string_by_name(&name)?.unwrap()
+                f.field_as_string_by_name(name)?.unwrap()
             } else {
                 i.to_string()
             };
@@ -322,7 +323,7 @@ fn check_spatial_ref_system_compatibility(points: &Layer, streams: &Layer) -> Re
         (Some(p), Some(s)) => {
             if p != s {
                 eprintln!("Spatial reference mismatch.");
-                eprintln!("{}", format!("{:?} {:?}", p, s));
+                eprintln!("{:?} {:?}", p, s);
                 // TODO proper error return
                 return Err(());
             }

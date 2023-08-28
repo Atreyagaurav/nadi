@@ -1,4 +1,3 @@
-use anyhow;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -54,7 +53,7 @@ impl Timeseries1 {
     }
 }
 
-enum TimeseriesTime {
+pub enum TimeseriesTime {
     None,
     Regular(usize, usize),
     Irregular(Vec<usize>),
@@ -102,26 +101,26 @@ impl Timeseries for Timeseries1 {
 
 pub trait Cast: Timeseries {
     fn cast_from(&mut self, other: &Self) {
-        (0..self.length()).for_each(|i| self.set_val(i, self.calc_cast_from(&other, i)));
+        (0..self.length()).for_each(|i| self.set_val(i, self.calc_cast_from(other, i)));
     }
     fn cast_to(&self, other: &mut Self) {
-        other.cast_from(&self);
+        other.cast_from(self);
     }
     fn calc_cast_from(&self, other: &Self, index: usize) -> f64 {
         other.get_val(index)
     }
     fn calc_cast_to(&self, other: &Self, index: usize) -> f64 {
-        other.calc_cast_from(&self, index)
+        other.calc_cast_from(self, index)
     }
     fn cast_na_only_from(&mut self, other: &Self) {
         (0..self.length()).for_each(|i| {
             if self.get_val(i).is_nan() {
-                self.set_val(i, self.calc_cast_from(&other, i))
+                self.set_val(i, self.calc_cast_from(other, i))
             }
         });
     }
     fn cast_to_na_only(&self, other: &mut Self) {
-        other.cast_na_only_from(&self);
+        other.cast_na_only_from(self);
     }
 }
 
