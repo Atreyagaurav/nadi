@@ -1,5 +1,4 @@
-use polars::export::chrono::Datelike;
-use polars::prelude::*;
+use polars::{lazy::dsl::when, prelude::*};
 
 pub struct Discharges<'a> {
     datetime_col: &'a str,
@@ -34,27 +33,25 @@ pub fn seasonality(ts: &Discharges) {
         .data_table
         .clone()
         .lazy()
-        .with_column(
-            col(ts.datetime_col)
-                .map(
-                    |s| {
-                        Ok(Some(
-                            s.date()
-                                .expect("series must contain date")
-                                .as_date_iter()
-                                .map(|d| d.map(|d| d.month()))
-                                .collect(),
-                        ))
-                    },
-                    GetOutput::from_type(DataType::Int32),
-                )
-                .alias("month"),
-        )
-        .groupby(&[col("month")])
+        .groupby(&[col(ts.datetime_col).dt().month().alias("month")])
         .agg([col("flow").mean()])
+        .sort("month", SortOptions::default())
         .collect()
         .unwrap();
     println!("{:#?}", seasonality);
+}
+
+pub fn annual_mean(ts: &Discharges) {
+    let annual = ts
+        .data_table
+        .clone()
+        .lazy()
+        .groupby(&[col(ts.datetime_col).dt().year().alias("year")])
+        .agg([col("flow").mean(), col("flow").count().alias("count")])
+        .sort("year", SortOptions::default())
+        .collect()
+        .unwrap();
+    println!("{:#?}", annual);
 }
 
 pub fn missing_data(ts: &Discharges) {
@@ -67,15 +64,18 @@ pub fn missing_data(ts: &Discharges) {
             col(ts.discharge_col).is_null().alias("isna"),
         ])
         .with_column(
-            (col("isna").cast(DataType::UInt64) - lit(1))
+            when(col("isna").eq(col("isna").shift(1)))
+                .then(lit(0))
+                .otherwise(lit(1))
                 .cumsum(false)
                 .alias("isna_blk"),
         )
-        .filter(col("isna").eq(1))
+        // .filter(col("isna"))
         .groupby([col("isna_blk")])
         .agg([
             col("start_date").first(),
             col("isna_blk").count().alias("count"),
+            col("isna").first(),
         ])
         .drop_columns(["isna_blk"])
         .sort("start_date", SortOptions::default())
@@ -88,4 +88,5 @@ pub fn run() {
     let ts = Discharges::new("streamflow.csv", "date", "flow");
     missing_data(&ts);
     seasonality(&ts);
+    annual_mean(&ts);
 }
