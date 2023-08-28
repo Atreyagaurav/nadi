@@ -54,6 +54,21 @@ pub fn annual_mean(ts: &Discharges) {
     println!("{:#?}", annual);
 }
 
+pub fn monthly_mean(ts: &Discharges) {
+    let monthly = ts
+        .data_table
+        .clone()
+        .lazy()
+        .groupby_stable(&[
+            col(ts.datetime_col).dt().year().alias("year"),
+            col(ts.datetime_col).dt().month().alias("month"),
+        ])
+        .agg([col("flow").mean(), col("flow").count().alias("count")])
+        .collect()
+        .unwrap();
+    println!("{:#?}", monthly);
+}
+
 pub fn missing_data(ts: &Discharges) {
     let df = ts
         .data_table
@@ -89,4 +104,5 @@ pub fn run() {
     missing_data(&ts);
     seasonality(&ts);
     annual_mean(&ts);
+    monthly_mean(&ts);
 }
