@@ -44,6 +44,12 @@ pub struct CliArgs {
     /// Latex table header and template
     #[arg(short = 'L', long, conflicts_with = "graphviz", value_parser=parse_latex_table)]
     latex_table: Vec<(String, Vec<NodeTemplate>)>,
+    /// Offset distance from Node to Node Label
+    #[arg(short = 'O', long, default_value = "1")]
+    label_offset: f64,
+    /// Factor to multiply the label length for placement
+    #[arg(short = 'F', long, default_value = "0.0")]
+    label_offset_factor: f64,
     /// Sort by this attribute
     #[arg(short, long)]
     sort_by: Option<String>,
@@ -73,6 +79,8 @@ struct GraphVizSettings {
     node_size: usize,
     node_template: Vec<NodeTemplate>,
     label_template: Vec<NodeTemplate>,
+    label_offset: f64,
+    label_offset_factor: f64,
     url_template: Vec<NodeTemplate>,
 }
 
@@ -85,6 +93,8 @@ impl GraphVizSettings {
             node_size: args.node_size,
             node_template: parse_template_str(&args.node_template),
             label_template: parse_template_str(&args.label_template),
+            label_offset: args.label_offset,
+            label_offset_factor: args.label_offset_factor,
             url_template: parse_template_str(&args.url_template),
         }
     }
@@ -622,7 +632,10 @@ impl Network {
 
         println!("digraph network {{");
         println!(" overlap=true;");
-        println!(" node [shape={},fixedsize=false];", settings.node_shape);
+        println!(
+            " node [shape={},fixedsize=false,fontname=FreeMono];",
+            settings.node_shape
+        );
 
         let horizontal = settings.direction == GraphVizDirection::LeftToRight;
         for (n, mut x, mut y) in &graph_nodes {
@@ -633,7 +646,6 @@ impl Network {
             // let riv_len = node.get_attr("riv_length").map(|l| ())
             let par = node.output.map(|o| self.nodes[o].index);
             let node_txt = node.format(&settings.node_template);
-            let label = node.format(&settings.label_template);
             let url = node.format(&settings.url_template);
             print!(
                 "{} [pos=\"{},{}!\", size={}, fixedsize=true",
@@ -645,17 +657,37 @@ impl Network {
                 print!(",URL=\"{}\"", url);
             }
             println!("]");
-            println!(
-                "l{} [shape=plain,pos=\"{},{}!\", label=\"{}\",fontsize=42]",
-                node.index,
-                if horizontal { x } else { max_x + 1 },
-                if horizontal { max_x + 1 } else { y },
-                label
-            );
-            println!("{0} -> l{0} [color=none]", node.index);
             if let Some(par) = par {
                 println!("{} -> {}", node.index, par);
             }
+        }
+        for (n, mut x, mut y) in &graph_nodes {
+            if horizontal {
+                (x, y) = (max_y - y, x);
+            }
+            let node = &self.nodes[*n];
+            let label = node.format(&settings.label_template);
+            let url = node.format(&settings.url_template);
+            let x = x as f64;
+            let y = y as f64;
+            let offset = *max_x as f64
+                + settings.label_offset
+                + settings.label_offset_factor * label.len() as f64;
+            // println!("subgraph cluster_labels{{");
+            // println!("rankdir=LR;\nrank=same;");
+            print!(
+                "l{} [shape=record,pos=\"{},{}!\", label=\"{:10}\",fontsize=42",
+                node.index,
+                if horizontal { x } else { offset },
+                if horizontal { offset } else { y },
+                label
+            );
+            if !url.is_empty() {
+                print!(",URL=\"{}\"", url);
+            }
+            println!("]");
+            println!("{0} -> l{0} [color=none]", node.index);
+            // println!("}}");
         }
         println!("}}");
     }
