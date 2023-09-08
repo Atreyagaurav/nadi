@@ -15,14 +15,12 @@ mcalpine -> cannelton
 cannelton -> newburgh
 newburgh -> evansville
 evansville -> jt-myers
-jt-myers -> old-shawneetown
-old-shawneetown -> golconda
+jt-myers -> golconda
 markland -> mcalpine
 golconda -> smithland
 natrona -> emsworth
-elizabeth2 -> braddock
-sutersville -> braddock
-braddock -> emsworth
+elizabeth2 -> emsworth
+sutersville -> emsworth
 beaverfalls -> montgomery
 mcconnelsville -> belleville
 athens -> belleville
@@ -43,4 +41,4 @@ lockport -> mcalpine
 brookville -> markland
 shepherdsville -> cannelton
 calhoun -> evansville
-mountcarmel -> old-shawneetown
+mountcarmel -> golconda
