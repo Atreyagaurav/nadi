@@ -33,17 +33,20 @@ pub struct CliArgs {
     #[arg(short = 'N', long, requires = "graphviz", default_value = "30")]
     node_size: usize,
     /// Template for the text inside the circle of nodes
-    #[arg(short, long, requires = "graphviz", default_value = "${index}")]
-    node_template: String,
+    #[arg(short, long, requires = "graphviz", default_value = "${index}", value_parser=parse_template_str)]
+    node_template: NodeTemplate,
     /// URL Template for Node URL
-    #[arg(short, long, default_value = "")]
-    url_template: String,
+    #[arg(short, long, default_value = "", value_parser=parse_template_str)]
+    url_template: NodeTemplate,
     /// Template for Node Label
-    #[arg(short, long, default_value = "${index}")]
-    label_template: String,
+    #[arg(short, long, default_value = "${index}", value_parser=parse_template_str)]
+    label_template: NodeTemplate,
     /// Latex table header and template
-    #[arg(short = 'L', long, conflicts_with = "graphviz", value_parser=parse_latex_table)]
-    latex_table: Vec<(String, Vec<NodeTemplate>)>,
+    #[arg(short = 'L', long, conflicts_with = "graphviz", value_parser=parse_latex_table, value_delimiter=';')]
+    latex_table: Vec<(String, NodeTemplate)>,
+    /// Simply print the node and attributes from the template
+    #[arg(short = 'D', long, conflicts_with = "graphviz")]
+    debug_print: bool,
     /// Sort by this attribute
     #[arg(short, long)]
     sort_by: Option<String>,
@@ -51,10 +54,12 @@ pub struct CliArgs {
     connection_file: PathBuf,
 }
 
-fn parse_latex_table(arg: &str) -> Result<(String, Vec<NodeTemplate>), anyhow::Error> {
-    arg.split_once(':')
-        .context("Header should have a template followed")
-        .map(|(head, templ)| (head.to_string(), parse_template_str(&templ)))
+fn parse_latex_table(arg: &str) -> Result<(String, NodeTemplate), anyhow::Error> {
+    let (head, templ) = arg
+        .split_once(':')
+        .context("Header should have a template followed")?;
+
+    Ok((head.to_string(), parse_template_str(templ)?))
 }
 // TODO make HashMap CLI args with graph attr, node_attr, label_attr,
 // edge_attr etc that can be looped through and then used for the dot
@@ -66,26 +71,26 @@ fn parse_latex_table(arg: &str) -> Result<(String, Vec<NodeTemplate>), anyhow::E
 // as well. The link type will use the anek template to open the
 // links. I can make it easy to change link template so the same link
 // can work to open multiple files for me.
-struct GraphVizSettings {
-    direction: GraphVizDirection,
-    sort_by: Option<String>,
-    node_shape: String,
+pub struct GraphVizSettings<'a> {
+    direction: &'a GraphVizDirection,
+    sort_by: &'a Option<String>,
+    node_shape: &'a str,
     node_size: usize,
-    node_template: Vec<NodeTemplate>,
-    label_template: Vec<NodeTemplate>,
-    url_template: Vec<NodeTemplate>,
+    node_template: &'a NodeTemplate,
+    label_template: &'a NodeTemplate,
+    url_template: &'a NodeTemplate,
 }
 
-impl GraphVizSettings {
-    fn new(args: &CliArgs) -> Self {
+impl<'a> GraphVizSettings<'a> {
+    fn new(args: &'a CliArgs) -> Self {
         Self {
-            direction: args.direction,
-            sort_by: args.sort_by.clone(),
-            node_shape: args.node_shape.clone(),
+            direction: &args.direction,
+            sort_by: &args.sort_by,
+            node_shape: &args.node_shape,
             node_size: args.node_size,
-            node_template: parse_template_str(&args.node_template),
-            label_template: parse_template_str(&args.label_template),
-            url_template: parse_template_str(&args.url_template),
+            node_template: &args.node_template,
+            label_template: &args.label_template,
+            url_template: &args.url_template,
         }
     }
 }
@@ -105,13 +110,15 @@ pub enum GraphVizDirection {
 impl CliAction for CliArgs {
     fn run(self) -> anyhow::Result<()> {
         let net = Network::from_file(&self.connection_file);
-        if self.graphviz {
+        if self.debug_print {
+            net.simple_print(&self.label_template);
+        } else if self.graphviz {
             let settings = GraphVizSettings::new(&self);
             net.graph_print_dot(&settings);
-        } else if self.latex_table.len() > 0 {
-            net.generate_latex_table(&self.latex_table, &parse_template_str(&self.url_template));
+        } else if !self.latex_table.is_empty() {
+            net.generate_latex_table(&self.latex_table, &self.url_template);
         } else {
-            net.graph_print(&parse_template_str(&self.label_template));
+            net.graph_print(&self.label_template);
         }
         Ok(())
     }
@@ -186,8 +193,10 @@ impl NodeAttr {
     }
 }
 
+pub type NodeTemplate = Vec<NodeTemplatePart>;
+
 #[derive(Clone)]
-pub enum NodeTemplate {
+pub enum NodeTemplatePart {
     Attr(String),
     Lit(String),
 }
@@ -256,10 +265,10 @@ impl Node {
         let reader_lines = BufReader::new(file).lines();
         for line in reader_lines {
             let line = line?.trim().to_string();
-            if line.starts_with("#") || line == "" {
+            if line.starts_with('#') || line.is_empty() {
                 continue;
             }
-            if let Some((key, val)) = line.split_once("=") {
+            if let Some((key, val)) = line.split_once('=') {
                 let val = val.trim();
                 if let Ok(n) = val.parse::<usize>() {
                     self.set_attr(key.trim(), NodeAttr::number(n));
@@ -284,12 +293,12 @@ impl Node {
         self.attrs.insert(key.to_string(), val);
     }
 
-    pub fn format(&self, template: &Vec<NodeTemplate>) -> String {
+    pub fn format(&self, template: &NodeTemplate) -> String {
         let mut repr = String::new();
         for tmpl in template {
             match tmpl {
-                NodeTemplate::Lit(s) => repr.push_str(&s),
-                NodeTemplate::Attr(s) => repr.push_str(&self.get_attr_repr(&s)),
+                NodeTemplatePart::Lit(s) => repr.push_str(s),
+                NodeTemplatePart::Attr(s) => repr.push_str(&self.get_attr_repr(s)),
             }
         }
         repr
@@ -319,11 +328,11 @@ impl Network {
         let mut indices: HashMap<String, usize> = HashMap::new();
         let mut inputs: Vec<Vec<usize>> = Vec::new();
         let mut output_map: HashMap<usize, usize> = HashMap::new();
-        let file = File::open(&filename).unwrap();
+        let file = File::open(filename).unwrap();
         let reader = BufReader::new(file);
         for line in reader.lines() {
             let line = line.unwrap().trim().to_string();
-            if line == "" || line.starts_with("#") {
+            if line.is_empty() || line.starts_with('#') {
                 continue;
             }
             if let Some((inp, out)) = line.split_once("->") {
@@ -365,31 +374,31 @@ impl Network {
         let mut all_nodes: HashSet<usize> = (0..self.nodes.len()).collect();
         let mut order_queue: Vec<usize> = Vec::with_capacity(self.nodes.len());
         loop {
-            if all_nodes.len() == 0 && order_queue.len() == 0 {
+            if all_nodes.is_empty() && order_queue.is_empty() {
                 break;
             }
 
-            if order_queue.len() == 0 {
-                let elem = all_nodes.iter().next().unwrap().clone();
+            if order_queue.is_empty() {
+                let elem = *all_nodes.iter().next().unwrap();
                 order_queue.push(elem);
                 all_nodes.remove(&elem);
             }
 
             let n = order_queue.pop().unwrap();
             let node: &Node = &self.nodes[n];
-            if node.inputs.len() == 0 {
+            if node.inputs.is_empty() {
                 self.nodes[n].set_attr("order", NodeAttr::Number(1));
             } else {
                 let uncalc_inputs: Vec<&usize> = node
                     .inputs
                     .iter()
-                    .filter(|i| all_nodes.contains(&i))
+                    .filter(|i| all_nodes.contains(i))
                     .collect();
-                if uncalc_inputs.len() > 0 {
+                if !uncalc_inputs.is_empty() {
                     order_queue.push(n);
                     uncalc_inputs.iter().for_each(|i| {
                         order_queue.push(**i);
-                        all_nodes.remove(&i);
+                        all_nodes.remove(i);
                     });
                 } else {
                     let ord: usize = node
@@ -415,23 +424,19 @@ impl Network {
         }
         // find the most downstream point
         let mut output = 0;
-        loop {
-            if let Some(out) = self.nodes[output].output {
-                output = out
-            } else {
-                break;
-            }
+        while let Some(out) = self.nodes[output].output {
+            output = out
         }
 
         let mut nodes: Vec<(usize, usize)> = Vec::new();
         let mut all_nodes: HashSet<usize> = (0..self.nodes.len()).collect();
         let mut curr_nodes: VecDeque<(usize, usize)> = VecDeque::from([(output, 0)]);
         loop {
-            if curr_nodes.len() == 0 {
-                if all_nodes.len() == 0 {
+            if curr_nodes.is_empty() {
+                if all_nodes.is_empty() {
                     break;
                 } else {
-                    let elem = all_nodes.iter().next().unwrap().clone();
+                    let elem = *all_nodes.iter().next().unwrap();
                     curr_nodes.push_back((elem, 0));
                     all_nodes.remove(&elem);
                 }
@@ -480,14 +485,14 @@ impl Network {
         self.nodes = new_nodes;
     }
 
-    pub fn simple_print(&self, template: &Vec<NodeTemplate>) {
+    pub fn simple_print(&self, template: &NodeTemplate) {
         for node in &self.nodes {
-            println!("{}", node.format(&template));
+            println!("{}", node.format(template));
         }
     }
 
-    pub fn graph_print(&self, template: &Vec<NodeTemplate>) {
-        if self.nodes.len() == 0 {
+    pub fn graph_print(&self, template: &NodeTemplate) {
+        if self.nodes.is_empty() {
             return;
         }
 
@@ -495,12 +500,12 @@ impl Network {
         let mut all_nodes: HashSet<usize> = (1..self.nodes.len()).collect();
         let mut curr_nodes: Vec<usize> = vec![0];
         loop {
-            if curr_nodes.len() == 0 {
-                if all_nodes.len() == 0 {
+            if curr_nodes.is_empty() {
+                if all_nodes.is_empty() {
                     break;
                 } else {
                     eprint!("Error");
-                    let elem = all_nodes.iter().next().unwrap().clone();
+                    let elem = *all_nodes.iter().next().unwrap();
                     curr_nodes.push(elem);
                     all_nodes.remove(&elem);
                 }
@@ -508,7 +513,7 @@ impl Network {
             let mut gnd = GraphNode::default();
             let n = curr_nodes.pop().unwrap();
             let node = &self.nodes[n];
-            gnd.text = node.format(&template);
+            gnd.text = node.format(template);
 
             let level = *node.get_attr("level").unwrap().read_number().unwrap();
             let par_level = *self.nodes[node.output.unwrap_or(node.index)]
@@ -561,12 +566,12 @@ impl Network {
                 for _ in 0..gnd.post {
                     print!(" |");
                 }
-                println!("");
+                println!();
             })
     }
 
     pub fn graph_print_dot(&self, settings: &GraphVizSettings) {
-        if self.nodes.len() == 0 {
+        if self.nodes.is_empty() {
             return;
         }
 
@@ -575,12 +580,12 @@ impl Network {
         let mut all_nodes: HashSet<usize> = (1..self.nodes.len()).collect();
         let mut curr_nodes: Vec<usize> = vec![0];
         loop {
-            if curr_nodes.len() == 0 {
-                if all_nodes.len() == 0 {
+            if curr_nodes.is_empty() {
+                if all_nodes.is_empty() {
                     break;
                 } else {
                     eprint!("Error");
-                    let elem = all_nodes.iter().next().unwrap().clone();
+                    let elem = *all_nodes.iter().next().unwrap();
                     curr_nodes.push(elem);
                     all_nodes.remove(&elem);
                 }
@@ -603,7 +608,7 @@ impl Network {
                 .iter()
                 .map(|n| {
                     self.nodes[*n]
-                        .get_attr(&sb)
+                        .get_attr(sb)
                         .expect("Attribute should be present")
                         .read_value()
                         .expect("Attribute should have float value")
@@ -624,7 +629,7 @@ impl Network {
         println!(" overlap=true;");
         println!(" node [shape={},fixedsize=false];", settings.node_shape);
 
-        let horizontal = settings.direction == GraphVizDirection::LeftToRight;
+        let horizontal = *settings.direction == GraphVizDirection::LeftToRight;
         for (n, mut x, mut y) in &graph_nodes {
             if horizontal {
                 (x, y) = (max_y - y, x);
@@ -632,9 +637,9 @@ impl Network {
             let node = &self.nodes[*n];
             // let riv_len = node.get_attr("riv_length").map(|l| ())
             let par = node.output.map(|o| self.nodes[o].index);
-            let node_txt = node.format(&settings.node_template);
-            let label = node.format(&settings.label_template);
-            let url = node.format(&settings.url_template);
+            let node_txt = node.format(settings.node_template);
+            let label = node.format(settings.label_template);
+            let url = node.format(settings.url_template);
             print!(
                 "{} [pos=\"{},{}!\", size={}, fixedsize=true",
                 node.index, x, y, settings.node_size
@@ -662,10 +667,10 @@ impl Network {
 
     fn generate_latex_table(
         &self,
-        latex_table: &Vec<(String, Vec<NodeTemplate>)>,
-        url_template: &Vec<NodeTemplate>,
+        latex_table: &Vec<(String, NodeTemplate)>,
+        url_template: &NodeTemplate,
     ) {
-        if self.nodes.len() == 0 {
+        if self.nodes.is_empty() {
             return;
         }
 
@@ -674,12 +679,12 @@ impl Network {
         let mut all_nodes: HashSet<usize> = (1..self.nodes.len()).collect();
         let mut curr_nodes: Vec<usize> = vec![0];
         loop {
-            if curr_nodes.len() == 0 {
-                if all_nodes.len() == 0 {
+            if curr_nodes.is_empty() {
+                if all_nodes.is_empty() {
                     break;
                 } else {
                     eprint!("Error");
-                    let elem = all_nodes.iter().next().unwrap().clone();
+                    let elem = *all_nodes.iter().next().unwrap();
                     curr_nodes.push(elem);
                     all_nodes.remove(&elem);
                 }
@@ -727,10 +732,10 @@ impl Network {
             let node = &self.nodes[*n];
             // let riv_len = node.get_attr("riv_length").map(|l| ())
             let parent = node.output.map(|o| self.nodes[o].index);
-            let url = node.format(&url_template);
+            let url = node.format(url_template);
             print!("\\TikzNode[{x}]{{{0}}}{{{0}}}{{{url}}}", node.index);
             for (_, templ) in latex_table {
-                let templ = node.format(&templ);
+                let templ = node.format(templ);
                 print!(" & {templ}");
             }
             println!(r"\\");
@@ -751,18 +756,18 @@ impl Network {
     }
 }
 
-fn parse_template_str(templ: &str) -> Vec<NodeTemplate> {
-    let mut template: Vec<NodeTemplate> = Vec::new();
+fn parse_template_str(templ: &str) -> Result<NodeTemplate, anyhow::Error> {
+    let mut template: Vec<NodeTemplatePart> = Vec::new();
     if templ.is_empty() {
-        return template;
+        return Ok(template);
     }
-    let mut split_str = templ.split("$");
-    template.push(NodeTemplate::Lit(split_str.next().unwrap().to_string()));
+    let mut split_str = templ.split('$');
+    template.push(NodeTemplatePart::Lit(split_str.next().unwrap().to_string()));
     for part in split_str {
         let mut attr = String::new();
         let mut litr = String::new();
-        if part.starts_with("{") {
-            let end = part.find('}').expect("Braces should be closed");
+        if part.starts_with('{') {
+            let end = part.find('}').context("Braces should be closed")?;
             attr.push_str(&part[1..end]);
             litr.push_str(&part[(end + 1)..]);
         } else {
@@ -778,10 +783,10 @@ fn parse_template_str(templ: &str) -> Vec<NodeTemplate> {
                 }
             }
         }
-        template.push(NodeTemplate::Attr(attr));
+        template.push(NodeTemplatePart::Attr(attr));
         if !litr.is_empty() {
-            template.push(NodeTemplate::Lit(litr));
+            template.push(NodeTemplatePart::Lit(litr));
         }
     }
-    template
+    Ok(template)
 }
