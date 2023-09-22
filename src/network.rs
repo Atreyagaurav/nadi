@@ -8,6 +8,7 @@ use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
 };
+use string_template_plus::{parse_template, Render, RenderOptions, Template};
 
 use crate::cliargs::CliAction;
 
@@ -33,17 +34,17 @@ pub struct CliArgs {
     #[arg(short = 'N', long, requires = "graphviz", default_value = "30")]
     node_size: usize,
     /// Template for the text inside the circle of nodes
-    #[arg(short, long, requires = "graphviz", default_value = "${index}", value_parser=parse_template_str)]
-    node_template: NodeTemplate,
+    #[arg(short, long, requires = "graphviz", default_value = "{index}")]
+    node_template: String,
     /// URL Template for Node URL
-    #[arg(short, long, default_value = "", value_parser=parse_template_str)]
-    url_template: NodeTemplate,
+    #[arg(short, long, default_value = "")]
+    url_template: String,
     /// Template for Node Label
-    #[arg(short, long, default_value = "${index}", value_parser=parse_template_str)]
-    label_template: NodeTemplate,
+    #[arg(short, long, default_value = "{index}")]
+    label_template: String,
     /// Latex table header and template
     #[arg(short = 'L', long, conflicts_with = "graphviz", value_parser=parse_latex_table, value_delimiter=';')]
-    latex_table: Vec<(String, NodeTemplate)>,
+    latex_table: Vec<(String, String)>,
     /// Simply print the node and attributes from the template
     #[arg(short = 'D', long, conflicts_with = "graphviz")]
     debug_print: bool,
@@ -54,12 +55,12 @@ pub struct CliArgs {
     connection_file: PathBuf,
 }
 
-fn parse_latex_table(arg: &str) -> Result<(String, NodeTemplate), anyhow::Error> {
+fn parse_latex_table(arg: &str) -> Result<(String, String), anyhow::Error> {
     let (head, templ) = arg
         .split_once(':')
         .context("Header should have a template followed")?;
-
-    Ok((head.to_string(), parse_template_str(templ)?))
+    parse_template(templ)?;
+    Ok((head.to_string(), templ.to_string()))
 }
 // TODO make HashMap CLI args with graph attr, node_attr, label_attr,
 // edge_attr etc that can be looped through and then used for the dot
@@ -76,23 +77,26 @@ pub struct GraphVizSettings<'a> {
     sort_by: &'a Option<String>,
     node_shape: &'a str,
     node_size: usize,
-    node_template: &'a NodeTemplate,
-    label_template: &'a NodeTemplate,
-    url_template: &'a NodeTemplate,
+    templates: Templates<'a>,
 }
 
 impl<'a> GraphVizSettings<'a> {
-    fn new(args: &'a CliArgs) -> Self {
+    fn new(args: &'a CliArgs, templates: Templates<'a>) -> Self {
         Self {
             direction: &args.direction,
             sort_by: &args.sort_by,
             node_shape: &args.node_shape,
             node_size: args.node_size,
-            node_template: &args.node_template,
-            label_template: &args.label_template,
-            url_template: &args.url_template,
+            templates,
         }
     }
+}
+
+#[derive(Clone)]
+struct Templates<'a> {
+    node: Template<'a>,
+    label: Template<'a>,
+    url: Template<'a>,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
@@ -109,16 +113,21 @@ pub enum GraphVizDirection {
 
 impl CliAction for CliArgs {
     fn run(self) -> anyhow::Result<()> {
+        let templ = Templates {
+            node: parse_template(&self.node_template)?,
+            label: parse_template(&self.label_template)?,
+            url: parse_template(&self.url_template)?,
+        };
         let net = Network::from_file(&self.connection_file);
         if self.debug_print {
-            net.simple_print(&self.label_template);
+            net.simple_print(&templ.label);
         } else if self.graphviz {
-            let settings = GraphVizSettings::new(&self);
+            let settings = GraphVizSettings::new(&self, templ);
             net.graph_print_dot(&settings);
         } else if !self.latex_table.is_empty() {
-            net.generate_latex_table(&self.latex_table, &self.url_template);
+            net.generate_latex_table(&self.latex_table, &templ.url);
         } else {
-            net.graph_print(&self.label_template);
+            net.graph_print(&templ.label);
         }
         Ok(())
     }
@@ -138,7 +147,7 @@ impl fmt::Display for NodeAttr {
             NodeAttr::String(s) => write!(f, "{}", s),
             NodeAttr::Number(n) => write!(f, "{}", n),
             NodeAttr::Vec(v) => write!(f, "{:?}", v),
-            NodeAttr::Value(v) => write!(f, "{:.2}", v),
+            NodeAttr::Value(v) => write!(f, "{}", v),
         }
     }
 }
@@ -193,14 +202,6 @@ impl NodeAttr {
     }
 }
 
-pub type NodeTemplate = Vec<NodeTemplatePart>;
-
-#[derive(Clone)]
-pub enum NodeTemplatePart {
-    Attr(String),
-    Lit(String),
-}
-
 #[derive(Default)]
 struct GraphNode {
     pre: usize,
@@ -216,16 +217,27 @@ pub struct Node {
     inputs: Vec<usize>,
     output: Option<usize>,
     attrs: HashMap<String, NodeAttr>,
+    render_ops: RenderOptions,
 }
 
 impl Node {
-    pub fn new(index: usize, name: String, inputs: Vec<usize>, output: Option<usize>) -> Self {
+    pub fn new(
+        index: usize,
+        name: String,
+        inputs: Vec<usize>,
+        output: Option<usize>,
+        wd: PathBuf,
+    ) -> Self {
         let mut node = Self {
             index,
             name: name.clone(),
             inputs: inputs.clone(),
             output,
             attrs: HashMap::new(),
+            render_ops: RenderOptions {
+                wd,
+                variables: HashMap::new(),
+            },
         };
         node.set_attr("name", NodeAttr::string(name));
         node.set_attr("index", NodeAttr::number(index));
@@ -290,18 +302,14 @@ impl Node {
     }
 
     pub fn set_attr(&mut self, key: &str, val: NodeAttr) {
+        self.render_ops
+            .variables
+            .insert(key.to_string(), val.to_string());
         self.attrs.insert(key.to_string(), val);
     }
 
-    pub fn format(&self, template: &NodeTemplate) -> String {
-        let mut repr = String::new();
-        for tmpl in template {
-            match tmpl {
-                NodeTemplatePart::Lit(s) => repr.push_str(s),
-                NodeTemplatePart::Attr(s) => repr.push_str(&self.get_attr_repr(s)),
-            }
-        }
-        repr
+    pub fn format(&self, template: &Template) -> String {
+        template.render(&self.render_ops).unwrap()
     }
 }
 
@@ -358,7 +366,16 @@ impl Network {
             .into_iter()
             .enumerate()
             .map(|(i, input)| {
-                let mut n = Node::new(i, names[&i].clone(), input, output_map.get(&i).copied());
+                let mut n = Node::new(
+                    i,
+                    names[&i].clone(),
+                    input,
+                    output_map.get(&i).copied(),
+                    filename
+                        .parent()
+                        .unwrap_or(&PathBuf::from("."))
+                        .to_path_buf(),
+                );
                 n.load_attrs_from_file(nodes_attrs_dir.join(format!("{}.txt", n.name)))
                     .ok();
                 n
@@ -485,13 +502,13 @@ impl Network {
         self.nodes = new_nodes;
     }
 
-    pub fn simple_print(&self, template: &NodeTemplate) {
+    pub fn simple_print(&self, template: &Template) {
         for node in &self.nodes {
             println!("{}", node.format(template));
         }
     }
 
-    pub fn graph_print(&self, template: &NodeTemplate) {
+    pub fn graph_print(&self, template: &Template) {
         if self.nodes.is_empty() {
             return;
         }
@@ -637,9 +654,9 @@ impl Network {
             let node = &self.nodes[*n];
             // let riv_len = node.get_attr("riv_length").map(|l| ())
             let par = node.output.map(|o| self.nodes[o].index);
-            let node_txt = node.format(settings.node_template);
-            let label = node.format(settings.label_template);
-            let url = node.format(settings.url_template);
+            let node_txt = node.format(&settings.templates.node);
+            let label = node.format(&settings.templates.label);
+            let url = node.format(&settings.templates.url);
             print!(
                 "{} [pos=\"{},{}!\", size={}, fixedsize=true",
                 node.index, x, y, settings.node_size
@@ -665,15 +682,14 @@ impl Network {
         println!("}}");
     }
 
-    fn generate_latex_table(
-        &self,
-        latex_table: &Vec<(String, NodeTemplate)>,
-        url_template: &NodeTemplate,
-    ) {
+    fn generate_latex_table(&self, latex_table: &Vec<(String, String)>, url_template: &Template) {
         if self.nodes.is_empty() {
             return;
         }
-
+        let latex_table: Vec<(&str, Template)> = latex_table
+            .iter()
+            .map(|(k, v)| (k.as_str(), parse_template(v).unwrap()))
+            .collect();
         // Node index, x and y
         let mut graph_nodes: Vec<(usize, usize, usize)> = Vec::new();
         let mut all_nodes: HashSet<usize> = (1..self.nodes.len()).collect();
@@ -701,6 +717,7 @@ impl Network {
                 }
             }
         }
+        let table_fmt: String = "l".repeat(latex_table.len() + 1);
         println!(
             r"\documentclass{{standalone}}
 
@@ -718,11 +735,11 @@ impl Network {
 
 \begin{{document}}
 
-  \begin{{tabular}}{{lllll}}
+  \begin{{tabular}}{{{table_fmt}}}
     \toprule"
         );
         print!("Connection");
-        for (head, _) in latex_table {
+        for (head, _) in &latex_table {
             print!(" & {head}");
         }
         println!(r"\\");
@@ -734,8 +751,8 @@ impl Network {
             let parent = node.output.map(|o| self.nodes[o].index);
             let url = node.format(url_template);
             print!("\\TikzNode[{x}]{{{0}}}{{{0}}}{{{url}}}", node.index);
-            for (_, templ) in latex_table {
-                let templ = node.format(templ);
+            for (_, templ) in &latex_table {
+                let templ = node.format(&templ);
                 print!(" & {templ}");
             }
             println!(r"\\");
@@ -754,39 +771,4 @@ impl Network {
         println!("}}");
         println!(r"\end{{document}}")
     }
-}
-
-fn parse_template_str(templ: &str) -> Result<NodeTemplate, anyhow::Error> {
-    let mut template: Vec<NodeTemplatePart> = Vec::new();
-    if templ.is_empty() {
-        return Ok(template);
-    }
-    let mut split_str = templ.split('$');
-    template.push(NodeTemplatePart::Lit(split_str.next().unwrap().to_string()));
-    for part in split_str {
-        let mut attr = String::new();
-        let mut litr = String::new();
-        if part.starts_with('{') {
-            let end = part.find('}').context("Braces should be closed")?;
-            attr.push_str(&part[1..end]);
-            litr.push_str(&part[(end + 1)..]);
-        } else {
-            for (i, c) in part.chars().enumerate() {
-                match c {
-                    'a'..='z' | 'A'..='Z' | '_' => {
-                        attr.push(c);
-                    }
-                    _ => {
-                        litr.push_str(&part[i..]);
-                        break;
-                    }
-                }
-            }
-        }
-        template.push(NodeTemplatePart::Attr(attr));
-        if !litr.is_empty() {
-            template.push(NodeTemplatePart::Lit(litr));
-        }
-    }
-    Ok(template)
 }

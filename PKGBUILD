@@ -1,6 +1,6 @@
 # Maintainer: Gaurav Atreya <allmanpride@gmail.com>
 pkgname=nadi
-pkgver=0.1.2
+pkgver=0.1.3
 pkgrel=1
 pkgdesc="Not Available Data Integration"
 arch=('x86_64')
