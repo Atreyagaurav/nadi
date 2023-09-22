@@ -34,17 +34,17 @@ pub struct CliArgs {
     #[arg(short = 'N', long, requires = "graphviz", default_value = "30")]
     node_size: usize,
     /// Template for the text inside the circle of nodes
-    #[arg(short, long, requires = "graphviz", default_value = "{index}")]
-    node_template: String,
+    #[arg(short, long, requires = "graphviz", default_value = "{index}", value_parser=parse_template)]
+    node_template: Template,
     /// URL Template for Node URL
-    #[arg(short, long, default_value = "")]
-    url_template: String,
+    #[arg(short, long, default_value = "", value_parser=parse_template)]
+    url_template: Template,
     /// Template for Node Label
-    #[arg(short, long, default_value = "{index}")]
-    label_template: String,
+    #[arg(short, long, default_value = "{index}", value_parser=parse_template)]
+    label_template: Template,
     /// Latex table header and template
     #[arg(short = 'L', long, conflicts_with = "graphviz", value_parser=parse_latex_table, value_delimiter=';')]
-    latex_table: Vec<(String, String)>,
+    latex_table: Vec<(String, Template)>,
     /// Simply print the node and attributes from the template
     #[arg(short = 'D', long, conflicts_with = "graphviz")]
     debug_print: bool,
@@ -55,12 +55,11 @@ pub struct CliArgs {
     connection_file: PathBuf,
 }
 
-fn parse_latex_table(arg: &str) -> Result<(String, String), anyhow::Error> {
+fn parse_latex_table(arg: &str) -> Result<(String, Template), anyhow::Error> {
     let (head, templ) = arg
         .split_once(':')
         .context("Header should have a template followed")?;
-    parse_template(templ)?;
-    Ok((head.to_string(), templ.to_string()))
+    Ok((head.to_string(), parse_template(templ)?))
 }
 // TODO make HashMap CLI args with graph attr, node_attr, label_attr,
 // edge_attr etc that can be looped through and then used for the dot
@@ -94,9 +93,9 @@ impl<'a> GraphVizSettings<'a> {
 
 #[derive(Clone)]
 struct Templates<'a> {
-    node: Template<'a>,
-    label: Template<'a>,
-    url: Template<'a>,
+    node: &'a Template,
+    label: &'a Template,
+    url: &'a Template,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
@@ -114,9 +113,9 @@ pub enum GraphVizDirection {
 impl CliAction for CliArgs {
     fn run(self) -> anyhow::Result<()> {
         let templ = Templates {
-            node: parse_template(&self.node_template)?,
-            label: parse_template(&self.label_template)?,
-            url: parse_template(&self.url_template)?,
+            node: &self.node_template,
+            label: &self.label_template,
+            url: &self.url_template,
         };
         let net = Network::from_file(&self.connection_file);
         if self.debug_print {
@@ -682,14 +681,10 @@ impl Network {
         println!("}}");
     }
 
-    fn generate_latex_table(&self, latex_table: &Vec<(String, String)>, url_template: &Template) {
+    fn generate_latex_table(&self, latex_table: &Vec<(String, Template)>, url_template: &Template) {
         if self.nodes.is_empty() {
             return;
         }
-        let latex_table: Vec<(&str, Template)> = latex_table
-            .iter()
-            .map(|(k, v)| (k.as_str(), parse_template(v).unwrap()))
-            .collect();
         // Node index, x and y
         let mut graph_nodes: Vec<(usize, usize, usize)> = Vec::new();
         let mut all_nodes: HashSet<usize> = (1..self.nodes.len()).collect();
@@ -739,7 +734,7 @@ impl Network {
     \toprule"
         );
         print!("Connection");
-        for (head, _) in &latex_table {
+        for (head, _) in latex_table {
             print!(" & {head}");
         }
         println!(r"\\");
@@ -751,7 +746,7 @@ impl Network {
             let parent = node.output.map(|o| self.nodes[o].index);
             let url = node.format(url_template);
             print!("\\TikzNode[{x}]{{{0}}}{{{0}}}{{{url}}}", node.index);
-            for (_, templ) in &latex_table {
+            for (_, templ) in latex_table {
                 let templ = node.format(&templ);
                 print!(" & {templ}");
             }

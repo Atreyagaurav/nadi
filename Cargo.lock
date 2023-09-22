@@ -1153,7 +1153,7 @@ dependencies = [
 
 [[package]]
 name = "nadi"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "clap",
@@ -2100,9 +2100,9 @@ checksum = "fe895eb47f22e2ddd4dabc02bce419d2e643c8e3b585c78158b349195bc24d82"
 
 [[package]]
 name = "string-template-plus"
-version = "0.1.3"
+version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ef113a2c919c0d56a29aa03e4c06498a60b5d658d070e75839d84cb5ef164af"
+checksum = "9e296ef7bde0d1eab1ce86604b77f3c5f0e102021861e8bc810c8b8469d71b34"
 dependencies = [
  "anyhow",
  "chrono",
