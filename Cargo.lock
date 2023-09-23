@@ -927,6 +927,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "joinery"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72167d68f5fce3b8655487b8038691a3c9984ee769590f93f2a631f4ad64e4f5"
+
+[[package]]
 name = "js-sys"
 version = "0.3.64"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2100,15 +2106,16 @@ checksum = "fe895eb47f22e2ddd4dabc02bce419d2e643c8e3b585c78158b349195bc24d82"
 
 [[package]]
 name = "string-template-plus"
-version = "0.1.4"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e296ef7bde0d1eab1ce86604b77f3c5f0e102021861e8bc810c8b8469d71b34"
+checksum = "a06fc76c33f14a5964b557786e93ebea56f93260c57534c2ad3c6c0119f0ac66"
 dependencies = [
  "anyhow",
  "chrono",
  "lazy_static",
  "regex",
  "subprocess",
+ "titlecase",
 ]
 
 [[package]]
@@ -2248,6 +2255,17 @@ name = "tinyvec_macros"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
+
+[[package]]
+name = "titlecase"
+version = "2.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "38397a8cdb017cfeb48bf6c154d6de975ac69ffeed35980fde199d2ee0842042"
+dependencies = [
+ "joinery",
+ "lazy_static",
+ "regex",
+]
 
 [[package]]
 name = "tokio"

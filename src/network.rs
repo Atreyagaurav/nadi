@@ -236,6 +236,7 @@ impl Node {
             render_ops: RenderOptions {
                 wd,
                 variables: HashMap::new(),
+                shell_commands: false,
             },
         };
         node.set_attr("name", NodeAttr::string(name));
