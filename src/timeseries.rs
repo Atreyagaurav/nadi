@@ -51,6 +51,8 @@ pub struct CliArgs {
 pub enum TsProcess {
     #[value(alias = "e")]
     Echo,
+    #[value(alias = "7q")]
+    Min7Day,
     #[value(alias = "na")]
     NaValues,
     #[value(alias = "nff")]
@@ -100,6 +102,7 @@ impl CliAction for CliArgs {
         ts.data_table = apply_date_range(&ts, &self);
 
         match self.command {
+            TsProcess::Min7Day => calc_min7day(&ts, &self),
             TsProcess::Echo => echo(&ts, &self),
             TsProcess::NaValues => missing_data(&ts, &self),
             TsProcess::MonthlySeasonality => monthly_seasonality(&ts, &self),
@@ -253,6 +256,29 @@ fn apply_date_range(ts: &Discharges, args: &CliArgs) -> DataFrame {
 
 pub fn echo(ts: &Discharges, args: &CliArgs) {
     dataframe_output(ts.data_table.clone(), args);
+}
+
+pub fn calc_min7day(ts: &Discharges, args: &CliArgs) {
+    let min_7day = ts
+        .data_table
+        .clone()
+        .lazy()
+        .with_columns(
+            &[col(ts.datetime_col).cast(DataType::Datetime(TimeUnit::Milliseconds, None))],
+        )
+        .with_columns(&[col(ts.discharge_col).rolling_mean(RollingOptions {
+            window_size: Duration::parse("7d"),
+            min_periods: 7,
+            by: Some(ts.datetime_col.to_string()),
+            closed_window: Some(ClosedWindow::Left),
+            ..Default::default()
+        })])
+        .groupby([col(ts.datetime_col).dt().year()])
+        .agg([col(ts.discharge_col).min()])
+        .collect()
+        .unwrap();
+
+    dataframe_output(min_7day, args);
 }
 
 pub fn na_fill_forward(ts: &Discharges, args: &CliArgs) {
