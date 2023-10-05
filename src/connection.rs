@@ -27,6 +27,9 @@ pub struct CliArgs {
     /// Output file
     #[arg(short, long)]
     output: Option<PathBuf>,
+    /// Connections only on the output file instead of whole streams
+    #[arg(short, long)]
+    connections_only: bool,
     /// Nodes file, if provided save the nodes of the graph as points with nodeid
     #[arg(short, long)]
     nodes: Option<PathBuf>,
@@ -98,22 +101,30 @@ impl CliArgs {
         if points.is_empty() || streams.is_empty() {
             return Ok(());
         }
-        let mut points_closest: HashMap<&str, (Point2D, f64)> = points
+        let mut points_closest: HashMap<&str, (Point2D, Point2D, f64)> = points
             .iter()
             .map(|(k, _)| {
                 let origin = Point2D::new((0.0, 0.0, 0.0));
-                (k.as_str(), (origin, f64::INFINITY))
+                (k.as_str(), (origin.clone(), origin, f64::INFINITY))
             })
             .collect();
 
+        // node: point to node number
         let mut nodes: HashMap<Point2D, usize> = HashMap::new();
+        // node number to geometry index in streams file
+        let mut streams_start: HashMap<usize, usize> = HashMap::new();
+        // geometries of the streams
+        let mut streams_touched: HashMap<usize, Geometry> = HashMap::new();
+        // edge: node to another node at the end
         let mut edges: HashMap<usize, usize> = HashMap::new();
         let mut branches: usize = 0;
-        for (_name, geom) in &streams {
+        for (i, (_name, geom)) in streams.iter().enumerate() {
             let start = Point2D::new(geom.get_point(0));
             let end = Point2D::new(geom.get_point((geom.point_count() - 1) as i32));
             if !nodes.contains_key(&start) {
-                nodes.insert(start.clone(), nodes.len());
+                let ind = nodes.len();
+                nodes.insert(start.clone(), ind);
+                streams_start.insert(ind, i);
             }
             if !nodes.contains_key(&end) {
                 nodes.insert(end.clone(), nodes.len());
@@ -131,10 +142,17 @@ impl CliArgs {
 
             points.iter().for_each(|(k, p)| {
                 let dist = distance(p, geom);
-                if dist < points_closest[k.as_str()].1 {
-                    points_closest.insert(k.as_str(), (end.clone(), dist));
+                if dist < points_closest[k.as_str()].2 {
+                    points_closest.insert(k.as_str(), (start.clone(), end.clone(), dist));
                 }
             });
+        }
+
+        for (_, (start, end, _)) in &points_closest {
+            let i = nodes[&start];
+            streams_touched.insert(i, streams[streams_start[&i]].1.clone());
+            let i = nodes[&end];
+            streams_touched.insert(i, streams[streams_start[&i]].1.clone());
         }
         if branches > 0 {
             eprintln!("{} branches out of {} edges. ", branches, edges.len());
@@ -168,7 +186,7 @@ impl CliArgs {
 
         let points_nodes: HashMap<usize, &str> = points_closest
             .iter()
-            .map(|(&k, (v, _))| (nodes[v], k))
+            .map(|(&k, (_, v, _))| (nodes[v], k))
             .collect();
         let mut points_edges: HashMap<usize, usize> = HashMap::new();
         let nodes_rev: HashMap<usize, &Point2D> = nodes.iter().map(|(k, &v)| (v, k)).collect();
@@ -179,6 +197,9 @@ impl CliArgs {
             loop {
                 if let Some(&o) = edges.get(&outlet) {
                     outlet = o;
+                    if let Some(i) = streams_start.get(&outlet) {
+                        streams_touched.insert(outlet, streams[*i].1.clone());
+                    }
                     // eprint!(" -> {}", outlet);
                     if points_nodes.contains_key(&o) {
                         println!("{} -> {}", points_nodes[pt], points_nodes[&outlet]);
@@ -206,29 +227,44 @@ impl CliArgs {
                 ty: gdal_sys::OGRwkbGeometryType::wkbLineString,
                 ..Default::default()
             })?;
-            layer.create_defn_fields(&[
-                ("start", OGRFieldType::OFTString),
-                ("end", OGRFieldType::OFTString),
-            ])?;
-            let fields = ["start", "end"];
 
-            let points_map: HashMap<&str, (f64, f64, f64)> = points
-                .iter()
-                .map(|(k, g)| (k.as_str(), g.get_point(0)))
-                .collect();
-            for (start, end) in &points_edges {
-                let mut edge_geometry =
-                    Geometry::empty(gdal_sys::OGRwkbGeometryType::wkbLineString)?;
-                edge_geometry.add_point(points_map[points_nodes[start]]);
-                edge_geometry.add_point(points_map[points_nodes[end]]);
-                layer.create_feature_fields(
-                    edge_geometry,
-                    &fields,
-                    &[
-                        FieldValue::StringValue(points_nodes[start].to_string()),
-                        FieldValue::StringValue(points_nodes[end].to_string()),
-                    ],
-                )?;
+            if self.connections_only {
+                layer.create_defn_fields(&[
+                    ("start", OGRFieldType::OFTString),
+                    ("end", OGRFieldType::OFTString),
+                ])?;
+                let fields = ["start", "end"];
+
+                let points_map: HashMap<&str, (f64, f64, f64)> = points
+                    .iter()
+                    .map(|(k, g)| (k.as_str(), g.get_point(0)))
+                    .collect();
+                for (start, end) in &points_edges {
+                    let mut edge_geometry =
+                        Geometry::empty(gdal_sys::OGRwkbGeometryType::wkbLineString)?;
+                    edge_geometry.add_point(points_map[points_nodes[start]]);
+                    edge_geometry.add_point(points_map[points_nodes[end]]);
+                    layer.create_feature_fields(
+                        edge_geometry,
+                        &fields,
+                        &[
+                            FieldValue::StringValue(points_nodes[start].to_string()),
+                            FieldValue::StringValue(points_nodes[end].to_string()),
+                        ],
+                    )?;
+                }
+            } else {
+                layer.create_defn_fields(&[("start", OGRFieldType::OFTString)])?;
+                let fields = ["start"];
+                for (start, geo) in streams_touched {
+                    layer.create_feature_fields(
+                        geo,
+                        &fields,
+                        &[FieldValue::StringValue(
+                            points_nodes.get(&start).unwrap_or(&"").to_string(),
+                        )],
+                    )?;
+                }
             }
             txn.commit()?;
         }
@@ -292,7 +328,7 @@ fn get_geometries(
                 }
             };
             let name = if let Some(name) = field {
-                f.field_as_string_by_name(name)?.unwrap()
+                f.field_as_string_by_name(name)?.unwrap_or("".to_string())
             } else {
                 i.to_string()
             };
