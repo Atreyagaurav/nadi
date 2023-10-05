@@ -8,7 +8,7 @@ use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
 };
-use string_template_plus::{parse_template, Render, RenderOptions, Template};
+use string_template_plus::{Render, RenderOptions, Template};
 
 use crate::cliargs::CliAction;
 
@@ -30,17 +30,26 @@ pub struct CliArgs {
     /// Shape of the node
     #[arg(short = 'S', long, requires = "graphviz", default_value = "circle")]
     node_shape: String,
+    /// Shape of the label
+    #[arg(short = 'O', long, requires = "graphviz", default_value = "1")]
+    node_offset: f64,
+    /// Shape of the label
+    #[arg(short = 'A', long, requires = "graphviz", default_value = "plain")]
+    label_shape: String,
+    /// Shape of the label
+    #[arg(short = 'o', long, requires = "graphviz", default_value = "1")]
+    label_offset: f64,
     /// size of the node
     #[arg(short = 'N', long, requires = "graphviz", default_value = "30")]
     node_size: usize,
     /// Template for the text inside the circle of nodes
-    #[arg(short, long, requires = "graphviz", default_value = "{index}", value_parser=parse_template)]
+    #[arg(short, long, requires = "graphviz", default_value = "{index}", value_parser=Template::parse_template)]
     node_template: Template,
     /// URL Template for Node URL
-    #[arg(short, long, default_value = "", value_parser=parse_template)]
+    #[arg(short, long, default_value = "", value_parser=Template::parse_template)]
     url_template: Template,
     /// Template for Node Label
-    #[arg(short, long, default_value = "{index}", value_parser=parse_template)]
+    #[arg(short, long, default_value = "{index}", value_parser=Template::parse_template)]
     label_template: Template,
     /// Latex table header and template
     #[arg(short = 'L', long, conflicts_with = "graphviz", value_parser=parse_latex_table, value_delimiter=';')]
@@ -59,7 +68,7 @@ fn parse_latex_table(arg: &str) -> Result<(String, Template), anyhow::Error> {
     let (head, templ) = arg
         .split_once(':')
         .context("Header should have a template followed")?;
-    Ok((head.to_string(), parse_template(templ)?))
+    Ok((head.to_string(), Template::parse_template(templ)?))
 }
 // TODO make HashMap CLI args with graph attr, node_attr, label_attr,
 // edge_attr etc that can be looped through and then used for the dot
@@ -75,6 +84,9 @@ pub struct GraphVizSettings<'a> {
     direction: &'a GraphVizDirection,
     sort_by: &'a Option<String>,
     node_shape: &'a str,
+    node_offset: f64,
+    label_shape: &'a str,
+    label_offset: f64,
     node_size: usize,
     templates: Templates<'a>,
 }
@@ -85,6 +97,9 @@ impl<'a> GraphVizSettings<'a> {
             direction: &args.direction,
             sort_by: &args.sort_by,
             node_shape: &args.node_shape,
+            node_offset: args.node_offset,
+            label_shape: &args.label_shape,
+            label_offset: args.label_offset,
             node_size: args.node_size,
             templates,
         }
@@ -378,6 +393,8 @@ impl Network {
                 );
                 n.load_attrs_from_file(nodes_attrs_dir.join(format!("{}.txt", n.name)))
                     .ok();
+                n.load_attrs_from_file(nodes_attrs_dir.join(format!("{}", n.name)))
+                    .ok();
                 n
             })
             .collect::<Vec<Node>>();
@@ -593,7 +610,7 @@ impl Network {
         }
 
         // Node index, x and y
-        let mut graph_nodes: Vec<(usize, usize, usize)> = Vec::new();
+        let mut graph_nodes: Vec<(usize, f64, f64)> = Vec::new();
         let mut all_nodes: HashSet<usize> = (1..self.nodes.len()).collect();
         let mut curr_nodes: Vec<usize> = vec![0];
         loop {
@@ -610,7 +627,11 @@ impl Network {
             let n = curr_nodes.pop().unwrap();
             let node = &self.nodes[n];
             let level = *node.get_attr("level").unwrap().read_number().unwrap();
-            graph_nodes.push((n, level, graph_nodes.len()));
+            graph_nodes.push((
+                n,
+                level as f64 * settings.node_offset,
+                graph_nodes.len() as f64 * settings.node_offset,
+            ));
 
             for &inp in node.inputs.iter().rev() {
                 if all_nodes.contains(&inp) {
@@ -632,15 +653,24 @@ impl Network {
                 })
                 .collect();
             ind.sort_by(|n1, n2| attrs[*n1].partial_cmp(&attrs[*n2]).unwrap());
-            let y_map: HashMap<usize, usize> =
-                ind.into_iter().enumerate().map(|(k, v)| (v, k)).collect();
+            let y_map: HashMap<usize, f64> = ind
+                .into_iter()
+                .enumerate()
+                .map(|(k, v)| (v, k as f64 * settings.node_offset))
+                .collect();
             graph_nodes = graph_nodes
                 .into_iter()
                 .map(|(n, x, _)| (n, x, y_map[&n]))
                 .collect();
         }
-        let max_x = graph_nodes.iter().map(|(_, x, _)| x).max().unwrap();
-        let max_y = graph_nodes.iter().map(|(_, _, y)| y).max().unwrap();
+        let max_x = graph_nodes
+            .iter()
+            .map(|(_, x, _)| x)
+            .fold(f64::NAN, |a, b| f64::max(a, *b));
+        let max_y = graph_nodes
+            .iter()
+            .map(|(_, _, y)| y)
+            .fold(f64::NAN, |a, b| f64::max(a, *b));
 
         println!("digraph network {{");
         println!(" overlap=true;");
@@ -667,13 +697,26 @@ impl Network {
                 print!(",URL=\"{}\"", url);
             }
             println!("]");
-            println!(
-                "l{} [shape=plain,pos=\"{},{}!\", label=\"{}\",fontsize=42]",
+            print!(
+                "l{} [shape={},pos=\"{},{}!\", label=\"{}\",fontsize=42",
                 node.index,
-                if horizontal { x } else { max_x + 1 },
-                if horizontal { max_x + 1 } else { y },
+                settings.label_shape,
+                if horizontal {
+                    x
+                } else {
+                    max_x + settings.label_offset
+                },
+                if horizontal {
+                    max_x + settings.label_offset
+                } else {
+                    y
+                },
                 label
             );
+            if !url.is_empty() {
+                print!(",URL=\"{}\"", url);
+            }
+            println!("]");
             println!("{0} -> l{0} [color=none]", node.index);
             if let Some(par) = par {
                 println!("{} -> {}", node.index, par);
