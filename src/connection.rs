@@ -1,5 +1,5 @@
 use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::PathBuf;
 
@@ -117,7 +117,7 @@ impl CliArgs {
         let mut streams_touched: HashMap<usize, Geometry> = HashMap::new();
         // edge: node to another node at the end
         let mut edges: HashMap<usize, usize> = HashMap::new();
-        let mut branches: usize = 0;
+        let mut branches: HashSet<usize> = HashSet::new();
         for (i, (_name, geom)) in streams.iter().enumerate() {
             let start = Point2D::new(geom.get_point(0));
             let end = Point2D::new(geom.get_point((geom.point_count() - 1) as i32));
@@ -132,12 +132,12 @@ impl CliArgs {
             if let Entry::Vacant(e) = edges.entry(nodes[&start]) {
                 e.insert(nodes[&end]);
             } else {
-                if branches == 0 {
+                if branches.is_empty() {
                     eprintln!("[WARN] River branching: ");
                 } else {
                     eprint!("  node {}: {} \r", nodes[&start], &start);
                 }
-                branches += 1;
+                branches.insert(nodes[&start]);
             }
 
             points.iter().for_each(|(k, p)| {
@@ -154,8 +154,8 @@ impl CliArgs {
             let i = nodes[&end];
             streams_touched.insert(i, streams[streams_start[&i]].1.clone());
         }
-        if branches > 0 {
-            eprintln!("{} branches out of {} edges. ", branches, edges.len());
+        if !branches.is_empty() {
+            eprintln!("{} branches out of {} edges. ", branches.len(), edges.len());
         }
 
         if let Some(filename) = &self.nodes {
@@ -197,6 +197,12 @@ impl CliArgs {
             loop {
                 if let Some(&o) = edges.get(&outlet) {
                     outlet = o;
+                    if branches.contains(&outlet) {
+                        eprintln!(
+                            "Branches detected from node {outlet} downstream of {}",
+                            points_nodes[pt]
+                        );
+                    }
                     if let Some(i) = streams_start.get(&outlet) {
                         streams_touched.insert(outlet, streams[*i].1.clone());
                     }
