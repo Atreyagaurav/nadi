@@ -1,5 +1,5 @@
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
 
@@ -112,32 +112,24 @@ impl CliArgs {
         // node: point to node number
         let mut nodes: HashMap<Point2D, usize> = HashMap::new();
         // node number to geometry index in streams file
-        let mut streams_start: HashMap<usize, usize> = HashMap::new();
+        let mut streams_geo_location: HashMap<(usize, usize), usize> = HashMap::new();
         // geometries of the streams
-        let mut streams_touched: HashMap<usize, Geometry> = HashMap::new();
+        let mut streams_touched: HashMap<(usize, usize), Geometry> = HashMap::new();
         // edge: node to another node at the end
         let mut edges: HashMap<usize, usize> = HashMap::new();
-        let mut branches: HashSet<usize> = HashSet::new();
+        let mut branches: HashMap<usize, usize> = HashMap::new();
         for (i, (_name, geom)) in streams.iter().enumerate() {
             let start = Point2D::new(geom.get_point(0));
             let end = Point2D::new(geom.get_point((geom.point_count() - 1) as i32));
-            if !nodes.contains_key(&start) {
-                let ind = nodes.len();
-                nodes.insert(start.clone(), ind);
-                streams_start.insert(ind, i);
-            }
-            if !nodes.contains_key(&end) {
-                nodes.insert(end.clone(), nodes.len());
-            }
-            if let Entry::Vacant(e) = edges.entry(nodes[&start]) {
-                e.insert(nodes[&end]);
+            let l = nodes.len();
+            let start_ind = *nodes.entry(start.clone()).or_insert(l);
+            let l = nodes.len();
+            let end_ind = *nodes.entry(end.clone()).or_insert(l);
+            streams_geo_location.insert((start_ind, end_ind), i);
+            if let Entry::Vacant(e) = edges.entry(start_ind) {
+                e.insert(end_ind);
             } else {
-                if branches.is_empty() {
-                    eprintln!("[WARN] River branching: ");
-                } else {
-                    eprint!("  node {}: {} \r", nodes[&start], &start);
-                }
-                branches.insert(nodes[&start]);
+                branches.insert(start_ind, end_ind);
             }
 
             points.iter().for_each(|(k, p)| {
@@ -149,15 +141,10 @@ impl CliArgs {
         }
 
         for (_, (start, end, _)) in &points_closest {
-            let i = nodes[&start];
-            streams_touched.insert(i, streams[streams_start[&i]].1.clone());
-            let i = nodes[&end];
-            streams_touched.insert(i, streams[streams_start[&i]].1.clone());
+            let edge = (nodes[&start], nodes[&end]);
+            let i = streams_geo_location[&edge];
+            streams_touched.insert(edge, streams[i].1.clone());
         }
-        if !branches.is_empty() {
-            eprintln!("{} branches out of {} edges. ", branches.len(), edges.len());
-        }
-
         if let Some(filename) = &self.nodes {
             let driver = DriverManager::get_driver_by_name(driver)?;
             let mut out_data = driver.create_vector_only(filename)?;
@@ -194,22 +181,25 @@ impl CliArgs {
         for pt in points_nodes.keys() {
             let mut outlet = *pt;
             // eprint!("{}", pt);
+            let mut curr_branches: Vec<&usize> = Vec::new();
+            let mut final_outlet = None;
             loop {
                 if let Some(&o) = edges.get(&outlet) {
-                    outlet = o;
-                    if branches.contains(&outlet) {
-                        eprintln!(
-                            "Branches detected from node {outlet} downstream of {}",
-                            points_nodes[pt]
-                        );
+                    if let Some(bout) = branches.get(&outlet) {
+                        if let Some(&i) = streams_geo_location.get(&(outlet, *bout)) {
+                            streams_touched.insert((outlet, i), streams[i].1.clone());
+                        }
+                        curr_branches.push(bout);
                     }
-                    if let Some(i) = streams_start.get(&outlet) {
-                        streams_touched.insert(outlet, streams[*i].1.clone());
+                    if let Some(&i) = streams_geo_location.get(&(outlet, o)) {
+                        streams_touched.insert((outlet, i), streams[i].1.clone());
                     }
                     // eprint!(" -> {}", outlet);
+                    outlet = o;
                     if points_nodes.contains_key(&o) {
                         println!("{} -> {}", points_nodes[pt], points_nodes[&outlet]);
                         points_edges.insert(*pt, outlet);
+                        final_outlet = Some(outlet);
                         break;
                     }
                 } else {
@@ -220,63 +210,111 @@ impl CliArgs {
                     break;
                 }
             }
+
+            for b in curr_branches {
+                // currently can't detect branches in the branch,
+                // maybe we can call it recursively after separating
+                // it in a function
+                let mut converses = false;
+                let mut b = *b;
+                while let Some(&co) = edges.get(&b) {
+                    if let Some(&i) = streams_geo_location.get(&(b, co)) {
+                        streams_touched.insert((outlet, i), streams[i].1.clone());
+                    }
+                    if Some(co) == final_outlet {
+                        converses = true;
+                        break;
+                    }
+                    b = co;
+                }
+                if final_outlet.is_some() && !converses {
+                    eprintln!(
+                        "Branch detected from node {} downstream of {}",
+                        b, points_nodes[pt]
+                    );
+                }
+            }
         }
 
         if let Some(output) = output {
-            let driver = DriverManager::get_driver_by_name(driver)?;
-            let mut out_data = driver.create_vector_only(output)?;
-
-            let mut txn = out_data.start_transaction()?;
-            let mut layer = txn.create_layer(LayerOptions {
-                name: "network",
-                srs: streams_lyr.spatial_ref().as_ref(),
-                ty: gdal_sys::OGRwkbGeometryType::wkbLineString,
-                ..Default::default()
-            })?;
-
-            if self.connections_only {
-                layer.create_defn_fields(&[
-                    ("start", OGRFieldType::OFTString),
-                    ("end", OGRFieldType::OFTString),
-                ])?;
-                let fields = ["start", "end"];
-
-                let points_map: HashMap<&str, (f64, f64, f64)> = points
-                    .iter()
-                    .map(|(k, g)| (k.as_str(), g.get_point(0)))
-                    .collect();
-                for (start, end) in &points_edges {
-                    let mut edge_geometry =
-                        Geometry::empty(gdal_sys::OGRwkbGeometryType::wkbLineString)?;
-                    edge_geometry.add_point(points_map[points_nodes[start]]);
-                    edge_geometry.add_point(points_map[points_nodes[end]]);
-                    layer.create_feature_fields(
-                        edge_geometry,
-                        &fields,
-                        &[
-                            FieldValue::StringValue(points_nodes[start].to_string()),
-                            FieldValue::StringValue(points_nodes[end].to_string()),
-                        ],
-                    )?;
-                }
-            } else {
-                layer.create_defn_fields(&[("start", OGRFieldType::OFTString)])?;
-                let fields = ["start"];
-                for (start, geo) in streams_touched {
-                    layer.create_feature_fields(
-                        geo,
-                        &fields,
-                        &[FieldValue::StringValue(
-                            points_nodes.get(&start).unwrap_or(&"").to_string(),
-                        )],
-                    )?;
-                }
-            }
-            txn.commit()?;
+            save_connections_file(
+                driver,
+                output,
+                &streams_lyr,
+                &points,
+                &points_nodes,
+                &points_edges,
+                streams_touched,
+                self.connections_only,
+            )?;
         }
 
         Ok(())
     }
+}
+
+fn save_connections_file(
+    driver: &str,
+    output: &PathBuf,
+    streams_lyr: &Layer,
+    points: &Vec<(String, Geometry)>,
+    points_nodes: &HashMap<usize, &str>,
+    points_edges: &HashMap<usize, usize>,
+    streams_touched: HashMap<(usize, usize), Geometry>,
+    connections_only: bool,
+) -> Result<(), anyhow::Error> {
+    let driver = DriverManager::get_driver_by_name(driver)?;
+    let mut out_data = driver.create_vector_only(output)?;
+
+    let mut txn = out_data.start_transaction()?;
+    let mut layer = txn.create_layer(LayerOptions {
+        name: "network",
+        srs: streams_lyr.spatial_ref().as_ref(),
+        ty: gdal_sys::OGRwkbGeometryType::wkbLineString,
+        ..Default::default()
+    })?;
+
+    if connections_only {
+        layer.create_defn_fields(&[
+            ("start", OGRFieldType::OFTString),
+            ("end", OGRFieldType::OFTString),
+        ])?;
+        let fields = ["start", "end"];
+
+        let points_map: HashMap<&str, (f64, f64, f64)> = points
+            .iter()
+            .map(|(k, g)| (k.as_str(), g.get_point(0)))
+            .collect();
+        for (start, end) in points_edges {
+            let mut edge_geometry = Geometry::empty(gdal_sys::OGRwkbGeometryType::wkbLineString)?;
+            edge_geometry.add_point(points_map[points_nodes[start]]);
+            edge_geometry.add_point(points_map[points_nodes[end]]);
+            layer.create_feature_fields(
+                edge_geometry,
+                &fields,
+                &[
+                    FieldValue::StringValue(points_nodes[start].to_string()),
+                    FieldValue::StringValue(points_nodes[end].to_string()),
+                ],
+            )?;
+        }
+    } else {
+        layer.create_defn_fields(&[("start", OGRFieldType::OFTString)])?;
+        layer.create_defn_fields(&[("end", OGRFieldType::OFTString)])?;
+        let fields = ["start", "end"];
+        for ((start, end), geo) in streams_touched {
+            layer.create_feature_fields(
+                geo,
+                &fields,
+                &[
+                    FieldValue::StringValue(points_nodes.get(&start).unwrap_or(&"").to_string()),
+                    FieldValue::StringValue(points_nodes.get(&end).unwrap_or(&"").to_string()),
+                ],
+            )?;
+        }
+    }
+    txn.commit()?;
+    Ok(())
 }
 
 #[derive(Eq, PartialEq, Hash, Clone, Debug)]
