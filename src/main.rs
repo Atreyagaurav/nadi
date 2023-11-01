@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 
 mod cliargs;
 mod connection;
+mod list;
 mod network;
 mod timeseries;
 mod usgs;
@@ -26,6 +27,8 @@ enum Action {
     Network(network::CliArgs),
     /// Connection
     Connection(connection::CliArgs),
+    /// List
+    List(list::CliArgs),
     /// Timeseries
     Timeseries(timeseries::CliArgs),
 }
@@ -36,6 +39,7 @@ impl CliAction for Action {
             Self::Usgs(v) => v.run(),
             Self::Network(v) => v.run(),
             Self::Connection(v) => v.run(),
+            Self::List(v) => v.run(),
             Self::Timeseries(v) => v.run(),
         }
     }
