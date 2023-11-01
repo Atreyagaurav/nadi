@@ -8,6 +8,12 @@ use crate::cliargs::CliAction;
 
 #[derive(Args)]
 pub struct CliArgs {
+    /// key separator
+    #[arg(short, long, default_value = "::")]
+    key_sep: String,
+    /// variable and value separator
+    #[arg(short, long, default_value = "=")]
+    var_sep: String,
     /// Fields to use as id for file
     #[arg(short, long)]
     primary_key: Option<String>,
@@ -63,15 +69,24 @@ impl CliArgs {
             f.fields().for_each(|(s, v)| {
                 if let Some(val) = v {
                     match val {
-                        FieldValue::Integer64Value(i) => println!("{name}::{s}={i}"),
-                        FieldValue::StringValue(i) => println!("{name}::{s}={i}"),
-                        FieldValue::RealValue(i) => println!("{name}::{s}={i}"),
-                        FieldValue::DateValue(i) => println!("{name}::{s}={i}"),
+                        FieldValue::Integer64Value(i) => self.print_single_attr(&name, &s, i),
+                        FieldValue::StringValue(i) => self.print_single_attr(&name, &s, i),
+                        FieldValue::RealValue(i) => self.print_single_attr(&name, &s, i),
+                        FieldValue::DateValue(i) => self.print_single_attr(&name, &s, i),
                         _ => (),
                     }
                 }
             });
         }
         Ok(())
+    }
+
+    fn print_single_attr<T: ToString>(&self, name: &str, key: &str, val: T) {
+        println!(
+            "{name}{}{key}{}{}",
+            self.key_sep,
+            self.var_sep,
+            val.to_string()
+        );
     }
 }

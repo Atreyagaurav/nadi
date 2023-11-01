@@ -2117,9 +2117,9 @@ checksum = "fe895eb47f22e2ddd4dabc02bce419d2e643c8e3b585c78158b349195bc24d82"
 
 [[package]]
 name = "string-template-plus"
-version = "0.3.4"
+version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62edd60c470b0430c16d7631f3112a92b121c4fbe1c04d7f4a54a28aa72c0b7c"
+checksum = "2e2d54036d9436d9b6ea11b36f0fd064d16db82cb4a42efec9c02bc6a047acc7"
 dependencies = [
  "anyhow",
  "chrono",
