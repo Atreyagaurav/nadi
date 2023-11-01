@@ -1,4 +1,4 @@
-use anyhow::{self, Context};
+use anyhow::{Context, Error};
 use clap::{Args, ValueEnum};
 use std::collections::VecDeque;
 use std::fmt;
@@ -51,6 +51,9 @@ pub struct CliArgs {
     /// Template for Node Label
     #[arg(short, long, default_value = "{index}", value_parser=Template::parse_template)]
     label_template: Template,
+    /// Cumulate the attribute (as float) based on the connections
+    #[arg(short, long, value_delimiter = ',')]
+    cumulate: Vec<String>,
     /// Latex table header and template
     #[arg(short = 'L', long, conflicts_with = "graphviz", value_parser=parse_latex_table, value_delimiter=';')]
     latex_table: Vec<(String, Template)>,
@@ -64,7 +67,7 @@ pub struct CliArgs {
     connection_file: PathBuf,
 }
 
-fn parse_latex_table(arg: &str) -> Result<(String, Template), anyhow::Error> {
+fn parse_latex_table(arg: &str) -> Result<(String, Template), Error> {
     let (head, templ) = arg
         .split_once(':')
         .context("Header should have a template followed")?;
@@ -132,7 +135,8 @@ impl CliAction for CliArgs {
             label: &self.label_template,
             url: &self.url_template,
         };
-        let net = Network::from_file(&self.connection_file);
+        let mut net = Network::from_file(&self.connection_file);
+        net.cumulate(&self.cumulate)?;
         if self.debug_print {
             net.simple_print(&templ.label);
         } else if self.graphviz {
@@ -328,6 +332,7 @@ impl Node {
     }
 }
 
+#[derive(Clone)]
 pub struct Network {
     pub indices: HashMap<String, usize>,
     pub nodes: Vec<Node>,
@@ -450,6 +455,39 @@ impl Network {
                 }
             }
         }
+    }
+
+    pub fn cumulate(&mut self, variables: &Vec<String>) -> Result<(), Error> {
+        if self.nodes.is_empty() {
+            return Ok(());
+        }
+        for var in variables {
+            let mut values: HashMap<&str, f32> = HashMap::new();
+            let cl = self.clone();
+            let (var, safe): (&str, bool) = if var.ends_with('?') {
+                (&var[..(var.len() - 1)], true)
+            } else {
+                (var.as_str(), false)
+            };
+            get_values(&cl, var, safe, &mut values)?;
+            for node in &cl.nodes {
+                let val = *values.get(node.get_name()).unwrap();
+                let mut out = node.output;
+                loop {
+                    if let Some(o) = out {
+                        let mut v = *values.get(cl.nodes[o].get_name()).unwrap();
+                        v += val;
+                        values.insert(cl.nodes[o].get_name(), v);
+                        out = cl.nodes[o].output;
+                    } else {
+                        break;
+                    }
+                }
+            }
+            set_values(self, var, &values);
+        }
+
+        Ok(())
     }
 
     pub fn reindex(&mut self) {
@@ -810,4 +848,36 @@ impl Network {
         println!("}}");
         println!(r"\end{{document}}")
     }
+}
+
+fn set_values(network: &mut Network, var: &str, values: &HashMap<&str, f32>) {
+    for i in 0..network.nodes.len() {
+        let val = *values.get(network.nodes[i].get_name()).unwrap();
+        network.nodes[i].set_attr(&format!("cum_{var}"), NodeAttr::value(val));
+    }
+}
+
+fn get_values<'a>(
+    network: &'a Network,
+    var: &str,
+    safe: bool,
+    values: &mut HashMap<&'a str, f32>,
+) -> Result<(), Error> {
+    for node in &network.nodes {
+        let val = if safe {
+            node.get_attr(var)
+                .and_then(|v| v.read_value())
+                .unwrap_or(0.0)
+        } else {
+            node.get_attr(var)
+                .context(format!("Node {} doesn't have attribute {}", node.name, var))?
+                .read_value()
+                .context(format!(
+                    "Node {}, attribute {} is not parsable as float",
+                    node.name, var
+                ))?
+        };
+        values.insert(node.get_name(), val);
+    }
+    Ok(())
 }
