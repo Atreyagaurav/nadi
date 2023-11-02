@@ -56,7 +56,7 @@ pub struct CliArgs {
     cumulate: Vec<String>,
     /// Latex table header and template
     #[arg(short = 'L', long, conflicts_with = "graphviz", value_parser=parse_latex_table, value_delimiter=';')]
-    latex_table: Vec<(String, Template)>,
+    latex_table: Vec<(String, char, Template)>,
     /// Simply print the node and attributes from the template
     #[arg(short = 'D', long, conflicts_with = "graphviz")]
     debug_print: bool,
@@ -67,11 +67,16 @@ pub struct CliArgs {
     connection_file: PathBuf,
 }
 
-fn parse_latex_table(arg: &str) -> Result<(String, Template), Error> {
+fn parse_latex_table(arg: &str) -> Result<(String, char, Template), Error> {
     let (head, templ) = arg
         .split_once(':')
         .context("Header should have a template followed")?;
-    Ok((head.to_string(), Template::parse_template(templ)?))
+    let (align, head) = match head.chars().next().context("Empty Template Not allowed")? {
+        '<' => ('l', &head[1..]),
+        '>' => ('r', &head[1..]),
+        _ => ('c', head),
+    };
+    Ok((head.to_string(), align, Template::parse_template(templ)?))
 }
 // TODO make HashMap CLI args with graph attr, node_attr, label_attr,
 // edge_attr etc that can be looped through and then used for the dot
@@ -763,7 +768,11 @@ impl Network {
         println!("}}");
     }
 
-    fn generate_latex_table(&self, latex_table: &Vec<(String, Template)>, url_template: &Template) {
+    fn generate_latex_table(
+        &self,
+        latex_table: &Vec<(String, char, Template)>,
+        url_template: &Template,
+    ) {
         if self.nodes.is_empty() {
             return;
         }
@@ -794,7 +803,10 @@ impl Network {
                 }
             }
         }
-        let table_fmt: String = "l".repeat(latex_table.len() + 1);
+        let table_fmt: String = format!(
+            "l{}",
+            latex_table.iter().map(|(_, c, _)| c).collect::<String>()
+        );
         println!(
             r"\documentclass{{standalone}}
 
@@ -816,7 +828,7 @@ impl Network {
     \toprule"
         );
         print!("Connection");
-        for (head, _) in latex_table {
+        for (head, _, _) in latex_table {
             print!(" & {head}");
         }
         println!(r"\\");
@@ -828,7 +840,7 @@ impl Network {
             let parent = node.output.map(|o| self.nodes[o].index);
             let url = node.format(url_template);
             print!("\\TikzNode[{x}]{{{0}}}{{{0}}}{{{url}}}", node.index);
-            for (_, templ) in latex_table {
+            for (_, _, templ) in latex_table {
                 let templ = node.format(&templ);
                 print!(" & {templ}");
             }
