@@ -30,6 +30,9 @@ pub struct CliArgs {
     /// Connections only on the output file instead of whole streams
     #[arg(short, long)]
     connections_only: bool,
+    /// Print progress
+    #[arg(short, long)]
+    verbose: bool,
     /// Nodes file, if provided save the nodes of the graph as points with nodeid
     #[arg(short, long)]
     nodes: Option<PathBuf>,
@@ -101,12 +104,11 @@ impl CliArgs {
         if points.is_empty() || streams.is_empty() {
             return Ok(());
         }
+
+        let origin = Point2D::new((0.0, 0.0, 0.0));
         let mut points_closest: HashMap<&str, (Point2D, Point2D, f64)> = points
             .iter()
-            .map(|(k, _)| {
-                let origin = Point2D::new((0.0, 0.0, 0.0));
-                (k.as_str(), (origin.clone(), origin, f64::INFINITY))
-            })
+            .map(|(k, _)| (k.as_str(), (origin.clone(), origin.clone(), f64::INFINITY)))
             .collect();
 
         // node: point to node number
@@ -118,6 +120,9 @@ impl CliArgs {
         // edge: node to another node at the end
         let mut edges: HashMap<usize, usize> = HashMap::new();
         let mut branches: HashMap<usize, usize> = HashMap::new();
+
+        let mut progress: usize = 0;
+        let total = streams.len();
         for (i, (_name, geom)) in streams.iter().enumerate() {
             let start = Point2D::new(geom.get_point(0));
             let end = Point2D::new(geom.get_point((geom.point_count() - 1) as i32));
@@ -138,6 +143,10 @@ impl CliArgs {
                     points_closest.insert(k.as_str(), (start.clone(), end.clone(), dist));
                 }
             });
+            if self.verbose {
+                progress += 1;
+                println!("Reading Streams: {}", progress * 100 / total);
+            }
         }
 
         for (_, (start, end, _)) in &points_closest {
@@ -178,6 +187,8 @@ impl CliArgs {
         let mut points_edges: HashMap<usize, usize> = HashMap::new();
         let nodes_rev: HashMap<usize, &Point2D> = nodes.iter().map(|(k, &v)| (v, k)).collect();
 
+        progress = 0;
+        let total = points_nodes.len();
         for pt in points_nodes.keys() {
             let mut outlet = *pt;
             // eprint!("{}", pt);
@@ -233,6 +244,10 @@ impl CliArgs {
                         b, points_nodes[pt]
                     );
                 }
+            }
+            if self.verbose {
+                progress += 1;
+                println!("Searching Connections: {}", progress * 100 / total);
             }
         }
 
