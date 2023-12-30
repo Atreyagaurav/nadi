@@ -3,9 +3,10 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
 
+use anyhow::Context;
 use clap::Args;
 use gdal::vector::{FieldValue, Geometry, Layer, LayerAccess, OGRFieldType};
-use gdal::{Dataset, DriverManager, LayerOptions};
+use gdal::{Dataset, Driver, DriverManager, GdalOpenFlags, LayerOptions, Metadata};
 use ordered_float::NotNan;
 
 use crate::cliargs::CliAction;
@@ -21,12 +22,12 @@ pub struct CliArgs {
     /// Fields to use as id for Streams vector file
     #[arg(short, long)]
     streams_field: Option<String>,
-    /// Output driver
-    #[arg(short, long, default_value = "GPKG")]
-    driver: String,
-    /// Output file
+    /// Output driver [default: based on file extension]
     #[arg(short, long)]
-    output: Option<PathBuf>,
+    driver: Option<String>,
+    /// Output file
+    #[arg(short, long, value_parser=parse_new_layer)]
+    output: Option<(PathBuf, Option<String>)>,
     /// Connections only on the output file instead of whole streams
     #[arg(short, long)]
     connections_only: bool,
@@ -34,14 +35,22 @@ pub struct CliArgs {
     #[arg(short, long)]
     verbose: bool,
     /// Nodes file, if provided save the nodes of the graph as points with nodeid
-    #[arg(short, long)]
-    nodes: Option<PathBuf>,
+    #[arg(short, long, value_parser=parse_new_layer)]
+    nodes: Option<(PathBuf, Option<String>)>,
     /// Points file with points of interest
     #[arg(value_parser=parse_layer, value_name="POINTS_FILE[:LAYER]")]
     points: (PathBuf, String),
     /// Streams vector file with streams network
     #[arg(value_parser=parse_layer, value_name="STREAMS_FILE[:LAYER]")]
     streams: (PathBuf, String),
+}
+
+fn parse_new_layer(arg: &str) -> Result<(PathBuf, Option<String>), anyhow::Error> {
+    if let Some((path, layer)) = arg.split_once(':') {
+        Ok((PathBuf::from(path), Some(layer.to_string())))
+    } else {
+        Ok((PathBuf::from(arg), None))
+    }
 }
 
 fn parse_layer(arg: &str) -> Result<(PathBuf, String), anyhow::Error> {
@@ -79,12 +88,11 @@ impl CliAction for CliArgs {
         let streams_data = Dataset::open(&self.streams.0).unwrap();
         let streams = streams_data.layer_by_name(&self.streams.1).unwrap();
 
-        if (self.ignore_spatial_reference
-            || check_spatial_ref_system_compatibility(&points, &streams).is_ok())
-            && valid_driver_name(&self.driver)
+        if self.ignore_spatial_reference
+            || check_spatial_ref_system_compatibility(&points, &streams).is_ok()
         // TODO streams is line GIS layer
         {
-            self.print_connections(points, streams, &self.output, &self.driver)?;
+            self.print_connections(points, streams, &self.output)?;
         }
 
         Ok(())
@@ -96,8 +104,7 @@ impl CliArgs {
         &self,
         mut points_lyr: Layer,
         mut streams_lyr: Layer,
-        output: &Option<PathBuf>,
-        driver: &str,
+        output: &Option<(PathBuf, Option<String>)>,
     ) -> Result<(), anyhow::Error> {
         let points = get_geometries(&mut points_lyr, &self.points_field)?;
         let streams = get_geometries(&mut streams_lyr, &self.streams_field)?;
@@ -154,13 +161,12 @@ impl CliArgs {
             let i = streams_geo_location[&edge];
             streams_touched.insert(edge, streams[i].1.clone());
         }
-        if let Some(filename) = &self.nodes {
-            let driver = DriverManager::get_driver_by_name(driver)?;
-            let mut out_data = driver.create_vector_only(filename)?;
-
-            let mut txn = out_data.start_transaction()?;
-            let mut layer = txn.create_layer(LayerOptions {
-                name: "nodes",
+        if let Some((filename, lyr)) = &self.nodes {
+            let driver = get_driver_by_filename(&filename, &self.driver)?;
+            let mut out_data = driver.create_vector_only(&filename)?;
+            // let mut txn = out_data.start_transaction()?;
+            let mut layer = out_data.create_layer(LayerOptions {
+                name: lyr.as_ref().unwrap_or(&"nodes".to_string()),
                 srs: streams_lyr.spatial_ref().as_ref(),
                 ty: gdal_sys::OGRwkbGeometryType::wkbPoint,
                 ..Default::default()
@@ -177,7 +183,7 @@ impl CliArgs {
                     &[FieldValue::IntegerValue(*id as i32)],
                 )?;
             }
-            txn.commit()?;
+            // txn.commit()?;
         }
 
         let points_nodes: HashMap<usize, &str> = points_closest
@@ -253,7 +259,7 @@ impl CliArgs {
 
         if let Some(output) = output {
             save_connections_file(
-                driver,
+                &self.driver,
                 output,
                 &streams_lyr,
                 &points,
@@ -269,8 +275,8 @@ impl CliArgs {
 }
 
 fn save_connections_file(
-    driver: &str,
-    output: &PathBuf,
+    driver: &Option<String>,
+    output: &(PathBuf, Option<String>),
     streams_lyr: &Layer,
     points: &Vec<(String, Geometry)>,
     points_nodes: &HashMap<usize, &str>,
@@ -278,12 +284,12 @@ fn save_connections_file(
     streams_touched: HashMap<(usize, usize), Geometry>,
     connections_only: bool,
 ) -> Result<(), anyhow::Error> {
-    let driver = DriverManager::get_driver_by_name(driver)?;
-    let mut out_data = driver.create_vector_only(output)?;
-
-    let mut txn = out_data.start_transaction()?;
-    let mut layer = txn.create_layer(LayerOptions {
-        name: "network",
+    let driver = get_driver_by_filename(&output.0, driver)?;
+    let mut out_data = driver.create_vector_only(&output.0)?;
+    // Not supported in all the formats, so removing it.
+    // let mut txn = out_data.start_transaction()?;
+    let mut layer = out_data.create_layer(LayerOptions {
+        name: output.1.as_ref().unwrap_or(&"network".to_string()),
         srs: streams_lyr.spatial_ref().as_ref(),
         ty: gdal_sys::OGRwkbGeometryType::wkbLineString,
         ..Default::default()
@@ -328,7 +334,7 @@ fn save_connections_file(
             )?;
         }
     }
-    txn.commit()?;
+    // txn.commit()?;
     Ok(())
 }
 
@@ -396,20 +402,6 @@ fn get_geometries(
         .collect()
 }
 
-fn valid_driver_name(name: &str) -> bool {
-    match DriverManager::get_driver_by_name(name) {
-        Ok(_) => true,
-        Err(e) => {
-            eprintln!("{:?}", e);
-            for i in 0..DriverManager::count() {
-                let d = DriverManager::get_driver(i).unwrap();
-                eprintln!("{} : {}", d.short_name(), d.long_name());
-            }
-            false
-        }
-    }
-}
-
 fn check_spatial_ref_system_compatibility(points: &Layer, streams: &Layer) -> Result<(), ()> {
     match (
         points.spatial_ref().and_then(|r| r.to_proj4().ok()),
@@ -434,4 +426,99 @@ fn check_spatial_ref_system_compatibility(points: &Layer, streams: &Layer) -> Re
         }
     }
     Ok(())
+}
+
+fn get_driver_by_filename(filename: &PathBuf, driver: &Option<String>) -> anyhow::Result<Driver> {
+    let drivers =
+        get_drivers_for_filename(filename.to_str().unwrap(), &GdalOpenFlags::GDAL_OF_VECTOR);
+
+    if let Some(driver) = driver {
+        drivers
+            .into_iter()
+            .filter(|d| d.short_name() == *driver)
+            .next()
+            .context(format!(
+                "There is no matching vector driver {driver} for filename {filename:?}"
+            ))
+    } else {
+        if drivers.len() > 1 {
+            eprintln!(
+                "Multiple drivers are compatible defaulting to the first: {:?}",
+                drivers
+                    .iter()
+                    .map(|d| d.short_name())
+                    .collect::<Vec<String>>()
+            )
+        }
+        drivers.into_iter().next().context(format!(
+            "Couldn't infer driver based on filename: {filename:?}"
+        ))
+    }
+}
+
+// remove once the gdal has the pull request merged
+// https://github.com/georust/gdal/pull/510
+fn get_drivers_for_filename(filename: &str, options: &GdalOpenFlags) -> Vec<Driver> {
+    let ext = {
+        let filename = filename.to_ascii_lowercase();
+        let e = match filename.rsplit_once(".") {
+            Some(("", _)) => "", // hidden file no ext
+            Some((f, "zip")) => {
+                // zip files could be zipped shp or gpkg
+                if f.ends_with(".shp") {
+                    "shp.zip"
+                } else if f.ends_with(".gpkg") {
+                    "gpkg.zip"
+                } else {
+                    "zip"
+                }
+            }
+            Some((_, e)) => e, // normal file with ext
+            None => "",
+        };
+        e.to_string()
+    };
+
+    let mut drivers: Vec<Driver> = Vec::new();
+    for i in 0..DriverManager::count() {
+        let d = DriverManager::get_driver(i).expect("Index for this loop should be valid");
+        let mut supports = false;
+        if (d.metadata_item("DCAP_CREATE", "").is_some()
+            || d.metadata_item("DCAP_CREATECOPY", "").is_some())
+            && ((options.contains(GdalOpenFlags::GDAL_OF_VECTOR)
+                && d.metadata_item("DCAP_VECTOR", "").is_some())
+                || (options.contains(GdalOpenFlags::GDAL_OF_RASTER)
+                    && d.metadata_item("DCAP_RASTER", "").is_some()))
+        {
+            supports = true;
+        } else if options.contains(GdalOpenFlags::GDAL_OF_VECTOR)
+            && d.metadata_item("DCAP_VECTOR_TRANSLATE_FROM", "").is_some()
+        {
+            supports = true;
+        }
+        if !supports {
+            continue;
+        }
+
+        if let Some(e) = &d.metadata_item("DMD_EXTENSION", "") {
+            if *e == ext {
+                drivers.push(d);
+                continue;
+            }
+        }
+        if let Some(e) = d.metadata_item("DMD_EXTENSIONS", "") {
+            if e.split(" ").collect::<Vec<&str>>().contains(&ext.as_str()) {
+                drivers.push(d);
+                continue;
+            }
+        }
+
+        if let Some(pre) = d.metadata_item("DMD_CONNECTION_PREFIX", "") {
+            if filename.starts_with(&pre) {
+                drivers.push(d);
+            }
+        }
+    }
+
+    return drivers;
 }

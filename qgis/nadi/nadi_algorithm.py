@@ -42,6 +42,7 @@ from qgis.core import (
     QgsProcessingParameterFeatureSink,
     QgsProcessingParameterFeatureSource,
     QgsProcessingParameterField,
+    QgsProcessingUtils,
     QgsRunProcess,
 )
 
@@ -141,10 +142,10 @@ class NadiAlgorithm(QgsProcessingAlgorithm):
         # to uniquely identify the feature sink, and must be included in the
         # dictionary returned by the processAlgorithm function.
         streams = self.parameterAsCompatibleSourceLayerPathAndLayerName(
-            parameters, self.STREAMS, context, ["gpkg", "shp"]
+            parameters, self.STREAMS, context, ["gpkg"]
         )
         points = self.parameterAsCompatibleSourceLayerPathAndLayerName(
-            parameters, self.POINTS, context, ["gpkg", "shp"]
+            parameters, self.POINTS, context, ["gpkg"]
         )
         connection = self.parameterAsOutputLayer(
             parameters, self.CONNECTIONS, context
@@ -152,6 +153,9 @@ class NadiAlgorithm(QgsProcessingAlgorithm):
         simplify = self.parameterAsBool(
             parameters, self.SIMPLIFY, context
         )
+
+        if connection.startswith("memory:"):
+            connection = QgsProcessingUtils.generateTempFilename("connections.gpkg", context)
         
         feedback.pushInfo("Running Nadi Command:")
         # main command, ignore spatial reference and verbose for progress
