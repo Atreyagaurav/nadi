@@ -112,21 +112,20 @@ impl CliArgs {
             return Ok(());
         }
 
-        let origin = Point2D::new((0.0, 0.0, 0.0));
-        let mut points_closest: HashMap<&str, (Point2D, Point2D, f64)> = points
-            .iter()
-            .map(|(k, _)| (k.as_str(), (origin.clone(), origin.clone(), f64::INFINITY)))
-            .collect();
-
         // node: point to node number
-        let mut nodes: HashMap<Point2D, usize> = HashMap::new();
+        let nodes_count = streams_lyr.feature_count() as usize + 1;
+        let points_count = points_lyr.feature_count() as usize;
+        let mut nodes: HashMap<Point2D, usize> = HashMap::with_capacity(nodes_count);
         // node number to geometry index in streams file
-        let mut streams_geo_location: HashMap<(usize, usize), usize> = HashMap::new();
+        let mut streams_geo_location: HashMap<(usize, usize), usize> =
+            HashMap::with_capacity(nodes_count);
         // geometries of the streams
-        let mut streams_touched: HashMap<(usize, usize), Geometry> = HashMap::new();
+        let mut streams_touched: HashMap<(usize, usize), Geometry> =
+            HashMap::with_capacity(nodes_count);
         // edge: node to another node at the end
-        let mut edges: HashMap<usize, usize> = HashMap::new();
-        let mut branches: HashMap<usize, usize> = HashMap::new();
+        let mut edges: HashMap<usize, usize> = HashMap::with_capacity(points_count);
+        let mut branches: HashMap<usize, usize> = HashMap::with_capacity(points_count);
+        let mut all_pts: HashMap<Point2D, (usize, usize)> = HashMap::new();
 
         let mut progress: usize = 0;
         let total = streams.len();
@@ -144,20 +143,44 @@ impl CliArgs {
                 branches.insert(start_ind, end_ind);
             }
 
-            points.iter().for_each(|(k, p)| {
-                let dist = distance(p, geom);
-                if dist < points_closest[k.as_str()].2 {
-                    points_closest.insert(k.as_str(), (start.clone(), end.clone(), dist));
-                }
+            geom.get_point_vec().iter().for_each(|p| {
+                all_pts
+                    .entry(Point2D::new(*p))
+                    .or_insert((start_ind, end_ind));
             });
+
             if self.verbose {
                 progress += 1;
                 println!("Reading Streams: {}", progress * 100 / total);
             }
         }
 
-        for (_, (start, end, _)) in &points_closest {
-            let edge = (nodes[&start], nodes[&end]);
+        let mut points_closest: HashMap<&str, (usize, usize)> = points
+            .iter()
+            .map(|(k, _)| (k.as_str(), (0usize, 0usize)))
+            .collect();
+        let mut progress: usize = 0;
+        let total = points.len();
+        for (k, p) in points.iter() {
+            let (x, y, _) = p.get_point(0);
+            let (mut min_pt, mut min_dist) = ((0usize, 0usize), f64::INFINITY);
+            for (np, ni) in all_pts.iter() {
+                let (sx, sy, _) = np.coord();
+                let dist = (sx - x).powi(2) + (sy - y).powi(2);
+                if dist < min_dist {
+                    min_dist = dist;
+                    min_pt = *ni;
+                }
+            }
+            points_closest.insert(k.as_str(), min_pt);
+            if self.verbose {
+                progress += 1;
+                println!("Snapping Points: {}", progress * 100 / total);
+            }
+        }
+
+        for (_, (start, end)) in &points_closest {
+            let edge = (*start, *end);
             let i = streams_geo_location[&edge];
             streams_touched.insert(edge, streams[i].1.clone());
         }
@@ -186,10 +209,8 @@ impl CliArgs {
             // txn.commit()?;
         }
 
-        let points_nodes: HashMap<usize, &str> = points_closest
-            .iter()
-            .map(|(&k, (_, v, _))| (nodes[v], k))
-            .collect();
+        let points_nodes: HashMap<usize, &str> =
+            points_closest.iter().map(|(&k, (_, v))| (*v, k)).collect();
         let mut points_edges: HashMap<usize, usize> = HashMap::new();
         let nodes_rev: HashMap<usize, &Point2D> = nodes.iter().map(|(k, &v)| (v, k)).collect();
 
@@ -361,16 +382,6 @@ impl fmt::Display for Point2D {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "({}, {})", self.x, self.y)
     }
-}
-
-fn distance(point: &Geometry, line: &Geometry) -> f64 {
-    let (x, y, _) = point.get_point(0);
-    let dist: f64 = line
-        .get_point_vec()
-        .iter()
-        .map(|&(sx, sy, _)| (sx - x).powi(2) + (sy - y).powi(2))
-        .fold(f64::INFINITY, |a, b| a.min(b));
-    dist
 }
 
 fn get_geometries(

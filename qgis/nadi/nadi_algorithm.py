@@ -155,7 +155,11 @@ class NadiAlgorithm(QgsProcessingAlgorithm):
         )
 
         if connection.startswith("memory:"):
+            # this does give the temp path, but doesn't connect it with the output layer.
             connection = QgsProcessingUtils.generateTempFilename("connections.gpkg", context)
+        elif connection.startswith("ogr:"):
+            feedback.reportError("Please use a save to file dialogue.")
+            return {self.CONNECTIONS: ""}
         
         feedback.pushInfo("Running Nadi Command:")
         # main command, ignore spatial reference and verbose for progress
