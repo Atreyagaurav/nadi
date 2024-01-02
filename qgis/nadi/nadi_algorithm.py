@@ -147,6 +147,8 @@ class NadiAlgorithm(QgsProcessingAlgorithm):
         points = self.parameterAsCompatibleSourceLayerPathAndLayerName(
             parameters, self.POINTS, context, ["gpkg"]
         )
+        points_id = self.parameterAsString(parameters, self.POINTS_ID, context)
+        streams_id = self.parameterAsString(parameters, self.STREAMS_ID, context)
         connection = self.parameterAsOutputLayer(
             parameters, self.CONNECTIONS, context
         )
@@ -167,6 +169,10 @@ class NadiAlgorithm(QgsProcessingAlgorithm):
         # add the input layers information
         if simplify:
             cmd += ["-c"]
+        if points_id:
+            cmd += ["-p", points_id]
+        if streams_id:
+            cmd += ["-s", streams_id]
         cmd += [":".join(points), ":".join(streams), "-o", connection]
         feedback.pushCommandInfo(" ".join(cmd))
 
