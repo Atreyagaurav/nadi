@@ -39,8 +39,8 @@ from qgis.core import (
     QgsProcessingException,
     QgsProcessingFeedback,
     QgsProcessingParameterBoolean,
-    QgsProcessingParameterFeatureSink,
     QgsProcessingParameterFeatureSource,
+    QgsProcessingParameterVectorDestination,
     QgsProcessingParameterField,
     QgsProcessingUtils,
     QgsRunProcess,
@@ -123,11 +123,8 @@ class NadiAlgorithm(QgsProcessingAlgorithm):
             )
         )
 
-        # We add a feature sink in which to store our processed features (this
-        # usually takes the form of a newly created vector layer when the
-        # algorithm is run in QGIS).
         self.addParameter(
-            QgsProcessingParameterFeatureSink(
+            QgsProcessingParameterVectorDestination(
                 self.CONNECTIONS,
                 self.tr('Output Network')
             )
@@ -152,16 +149,12 @@ class NadiAlgorithm(QgsProcessingAlgorithm):
         connection = self.parameterAsOutputLayer(
             parameters, self.CONNECTIONS, context
         )
+        connection_lyr = self.parameterAsLayer(
+            parameters, self.CONNECTIONS, context
+        )
         simplify = self.parameterAsBool(
             parameters, self.SIMPLIFY, context
         )
-
-        if connection.startswith("memory:"):
-            # this does give the temp path, but doesn't connect it with the output layer.
-            connection = QgsProcessingUtils.generateTempFilename("connections.gpkg", context)
-        elif connection.startswith("ogr:"):
-            feedback.reportError("Please use a save to file dialogue.")
-            return {self.CONNECTIONS: ""}
         
         feedback.pushInfo("Running Nadi Command:")
         # main command, ignore spatial reference and verbose for progress
@@ -230,7 +223,7 @@ class NadiAlgorithm(QgsProcessingAlgorithm):
         # statistics, etc. These should all be included in the returned
         # dictionary, with keys matching the feature corresponding parameter
         # or output names.
-        return {self.CONNECTIONS: connection}
+        return {self.CONNECTIONS: connection_lyr}
 
     def name(self):
         """
