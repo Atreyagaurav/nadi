@@ -7,6 +7,15 @@ Nadi also means river in Nepali.
 
 Although the term "graph" is used, here it is used to mean directional graphs as we're focusing in river networks.
 
+# Installation
+## Binary
+`nadi` binary can be installed using the rust ecosystem, or the `makepkg` command in Arch Linux.
+
+To compile the program, run `cargo build --release`, and then you'll have the `nadi` binary in the `target/release` folder. Copy that to your `PATH`. Also, you'll probably need shared libraries for `gdal`
+
+## QGIS plugin
+The python plugin for QGIS is in the `qgis/` directory. Copy `qgis/nadi` to `~/.local/share/QGIS/QGIS3/profiles/default/python/plugins/` to load it into QGIS.
+
 # Planned Features
 - [ ] Read graph connection from a file
   - [x] Ignore comments
