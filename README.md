@@ -16,6 +16,18 @@ To compile the program, run `cargo build --release`, and then you'll have the `n
 ## QGIS plugin
 The python plugin for QGIS is in the `qgis/` directory. Copy `qgis/nadi` to `~/.local/share/QGIS/QGIS3/profiles/default/python/plugins/` to load it into QGIS.
 
+A demo video of the plugin can be found here: https://youtu.be/-dmTnIKeUZs
+
+# Screenshots
+
+Inputs and outputs for the subcommand `connection`:
+
+![intro](./videos/thumbnail.png)
+
+Example output from the subcommand `network` compiled with `pdflatex`:
+
+![table](./videos/table.png)
+
 # Planned Features
 - [ ] Read graph connection from a file
   - [x] Ignore comments
