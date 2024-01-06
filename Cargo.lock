@@ -1236,7 +1236,7 @@ dependencies = [
 
 [[package]]
 name = "nadi"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "clap",
@@ -1943,6 +1943,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rust_lisp"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5c5734eceb60a15465bc85cafe540f454b79e23732bf56f913d081d9ae008ee"
+dependencies = [
+ "cfg-if",
+ "libm",
+]
+
+[[package]]
 name = "rustc-demangle"
 version = "0.1.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2221,15 +2231,16 @@ checksum = "fe895eb47f22e2ddd4dabc02bce419d2e643c8e3b585c78158b349195bc24d82"
 
 [[package]]
 name = "string-template-plus"
-version = "0.3.7"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e2d54036d9436d9b6ea11b36f0fd064d16db82cb4a42efec9c02bc6a047acc7"
+checksum = "5c47d7cf52cfd896682500ed6a9e09b8b69c1512ecc7d80023ab5ea810547084"
 dependencies = [
  "anyhow",
  "chrono",
  "colored",
  "lazy_static",
  "regex",
+ "rust_lisp",
  "subprocess",
  "titlecase",
 ]
