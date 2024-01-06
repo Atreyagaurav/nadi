@@ -14,4 +14,4 @@ ordered-float = "3.7.0"
 polars = { version = "0.32.1", features = ["lazy", "dtype-date", "rolling_window"] }
 reqwest = { version = "0.11.18", features = ["blocking", "json"] }
 statrs = "0.16.0"
-string-template-plus = "0.4.1"
+string-template-plus = "0.4.2"

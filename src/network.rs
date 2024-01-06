@@ -51,12 +51,14 @@ pub struct CliArgs {
     /// Template for Node Label
     #[arg(short, long, default_value = "{index}", value_parser=Template::parse_template)]
     label_template: Template,
-    /// Cumulate the attribute (as float) based on the connections
-    #[arg(short, long, value_delimiter = ',')]
-    cumulate: Vec<String>,
     /// Latex table header and template
+    ///
+    /// The columns from the CLI appear after the columns from --table-file
     #[arg(short = 'L', long, conflicts_with = "graphviz", value_parser=parse_latex_table, value_delimiter=';')]
     latex_table: Vec<(String, char, Template)>,
+    /// File containing the Latex table header and template
+    #[arg(short, long, conflicts_with = "graphviz", value_parser=parse_latex_table_from_file)]
+    columns_file: std::vec::Vec<(String, char, Template)>,
     /// Simply print the node and attributes from the template
     #[arg(short = 'D', long, conflicts_with = "graphviz")]
     debug_print: bool,
@@ -77,6 +79,28 @@ fn parse_latex_table(arg: &str) -> Result<(String, char, Template), Error> {
         _ => ('c', head),
     };
     Ok((head.to_string(), align, Template::parse_template(templ)?))
+}
+
+fn parse_latex_table_from_file(filename: &str) -> Result<Vec<(String, char, Template)>, Error> {
+    let file = File::open(filename)?;
+    let reader_lines = BufReader::new(file).lines();
+    let mut templates: Vec<(String, char, Template)> = Vec::new();
+    for line in reader_lines {
+        let line = line?.trim().to_string();
+        if line.starts_with('#') || line.is_empty() {
+            continue;
+        }
+        let (head, templ) = line
+            .split_once(':')
+            .context("Header should have a template followed")?;
+        let (align, head) = match head.chars().next().context("Empty Template Not allowed")? {
+            '<' => ('l', &head[1..]),
+            '>' => ('r', &head[1..]),
+            _ => ('c', head),
+        };
+        templates.push((head.to_string(), align, Template::parse_template(templ)?));
+    }
+    Ok(templates)
 }
 // TODO make HashMap CLI args with graph attr, node_attr, label_attr,
 // edge_attr etc that can be looped through and then used for the dot
@@ -141,14 +165,27 @@ impl CliAction for CliArgs {
             url: &self.url_template,
         };
         let mut net = Network::from_file(&self.connection_file);
-        net.cumulate(&self.cumulate)?;
+
+        let mut tab = self.columns_file.clone();
+        tab.extend(self.latex_table.clone());
+        let mut cumulate = Vec::new();
+        for (_, _, templ) in &tab {
+            for p in templ.parts() {
+                for v in p.variables() {
+                    if v.starts_with("++") || v.starts_with("+!") {
+                        cumulate.push(v);
+                    }
+                }
+            }
+        }
+        net.cumulate(cumulate)?;
         if self.debug_print {
             net.simple_print(&templ.label);
         } else if self.graphviz {
             let settings = GraphVizSettings::new(&self, templ);
             net.graph_print_dot(&settings);
-        } else if !self.latex_table.is_empty() {
-            net.generate_latex_table(&self.latex_table, &templ.url);
+        } else if !tab.is_empty() {
+            net.generate_latex_table(&tab, &templ.url);
         } else {
             net.graph_print(&templ.label);
         }
@@ -462,17 +499,18 @@ impl Network {
         }
     }
 
-    pub fn cumulate(&mut self, variables: &Vec<String>) -> Result<(), Error> {
+    pub fn cumulate(&mut self, variables: Vec<&str>) -> Result<(), Error> {
         if self.nodes.is_empty() {
             return Ok(());
         }
         for var in variables {
             let mut values: HashMap<&str, f32> = HashMap::new();
             let cl = self.clone();
-            let (var, safe): (&str, bool) = if var.ends_with('?') {
-                (&var[..(var.len() - 1)], true)
-            } else {
-                (var.as_str(), false)
+            let (pre, var) = var.split_at(2);
+            let safe = match pre.chars().last() {
+                Some('+') => true,
+                Some('!') => false,
+                _ => panic!("cumulative variables should have ++ or +! as prefix"),
             };
             get_values(&cl, var, safe, &mut values)?;
             for node in &cl.nodes {
@@ -489,7 +527,7 @@ impl Network {
                     }
                 }
             }
-            set_values(self, var, &values);
+            set_cum_values(self, vec!["cum_", pre], var, &values);
         }
 
         Ok(())
@@ -862,10 +900,17 @@ impl Network {
     }
 }
 
-fn set_values(network: &mut Network, var: &str, values: &HashMap<&str, f32>) {
+fn set_cum_values(
+    network: &mut Network,
+    prefixes: Vec<&str>,
+    var: &str,
+    values: &HashMap<&str, f32>,
+) {
     for i in 0..network.nodes.len() {
         let val = *values.get(network.nodes[i].get_name()).unwrap();
-        network.nodes[i].set_attr(&format!("cum_{var}"), NodeAttr::value(val));
+        for p in &prefixes {
+            network.nodes[i].set_attr(&format!("{p}{var}"), NodeAttr::value(val));
+        }
     }
 }
 
